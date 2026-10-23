@@ -1,2 +1,8 @@
-package com.tradeflow.api.quotation;public class QuotationStatus {
+package com.tradeflow.api.quotation;
+
+public enum QuotationStatus {
+    SUBMITTED,
+    ACCEPTED,
+    REJECTED,
+    WITHDRAWN
 }
