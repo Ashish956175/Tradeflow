@@ -1,7 +1,10 @@
 package com.tradeflow.api.procurement;
 
 import jakarta.validation.Valid;
+
 import org.springframework.http.HttpStatus;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -21,28 +24,32 @@ public class ProcurementRequestController {
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public ProcurementRequest createProcurementRequest(
-            @Valid @RequestBody ProcurementRequestRequest request
+            @Valid @RequestBody ProcurementRequestRequest request,
+            @AuthenticationPrincipal Jwt jwt
     ) {
-        return procurementRequestService.createProcurementRequest(request);
+        return procurementRequestService.createProcurementRequest(
+                request,
+                jwt.getSubject()
+        );
     }
 
     @GetMapping
-    public List<ProcurementRequest> getAllProcurementRequests() {
-        return procurementRequestService.getAllProcurementRequests();
+    public List<ProcurementRequest> getMyProcurementRequests(
+            @AuthenticationPrincipal Jwt jwt
+    ) {
+        return procurementRequestService.getMyProcurementRequests(
+                jwt.getSubject()
+        );
     }
 
     @GetMapping("/{id}")
     public ProcurementRequest getProcurementRequestById(
-            @PathVariable Long id
+            @PathVariable Long id,
+            @AuthenticationPrincipal Jwt jwt
     ) {
-        return procurementRequestService.getProcurementRequestById(id);
-    }
-
-    @GetMapping("/buyer/{organizationId}")
-    public List<ProcurementRequest> getProcurementRequestsByBuyer(
-            @PathVariable Long organizationId
-    ) {
-        return procurementRequestService
-                .getProcurementRequestsByBuyer(organizationId);
+        return procurementRequestService.getProcurementRequestById(
+                id,
+                jwt.getSubject()
+        );
     }
 }

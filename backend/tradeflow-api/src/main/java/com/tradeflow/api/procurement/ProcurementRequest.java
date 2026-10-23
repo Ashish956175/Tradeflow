@@ -107,4 +107,22 @@ public class ProcurementRequest {
     public LocalDateTime getCreatedAt() {
         return createdAt;
     }
+
+    public void markQuotationsReceived() {
+        if (this.status == ProcurementStatus.OPEN) {
+            this.status = ProcurementStatus.QUOTATIONS_RECEIVED;
+        }
+    }
+
+    public void acceptQuotation() {
+        if (this.status != ProcurementStatus.OPEN
+                && this.status != ProcurementStatus.QUOTATIONS_RECEIVED) {
+            throw new IllegalStateException(
+                    "Cannot accept a quotation for a procurement request with status: "
+                            + this.status
+            );
+        }
+
+        this.status = ProcurementStatus.ACCEPTED;
+    }
 }
