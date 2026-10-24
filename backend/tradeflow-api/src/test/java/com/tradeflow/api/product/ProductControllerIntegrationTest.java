@@ -23,6 +23,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.List;
@@ -53,13 +54,14 @@ class ProductControllerIntegrationTest {
     private ProductService productService;
 
     private String createToken(String role) {
+
         Instant now = Instant.now();
 
         JwtClaimsSet claims = JwtClaimsSet.builder()
                 .issuer("tradeflow-api")
                 .issuedAt(now)
                 .expiresAt(now.plusSeconds(1800))
-                .subject("buyer@test.com")
+                .subject("test@example.com")
                 .claim("userId", 1L)
                 .claim("role", role)
                 .build();
@@ -72,6 +74,10 @@ class ProductControllerIntegrationTest {
                 JwtEncoderParameters.from(header, claims)
         ).getTokenValue();
     }
+
+    // --------------------------------------------------
+    // GET PRODUCTS
+    // --------------------------------------------------
 
     @Test
     void getProducts_withoutAuthentication_shouldReturnUnauthorized()
@@ -90,26 +96,7 @@ class ProductControllerIntegrationTest {
     }
 
     @Test
-    void createProduct_withoutAuthentication_shouldReturnUnauthorized()
-            throws Exception {
-
-        mockMvc.perform(post("/api/v1/products")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {
-                                    "name": "Safety Gloves",
-                                    "description": "Industrial safety gloves",
-                                    "sku": "TG-001",
-                                    "unitPrice": 150.00,
-                                    "availableQuantity": 100,
-                                    "unit": "PAIR"
-                                }
-                                """))
-                .andExpect(status().isUnauthorized());
-    }
-
-    @Test
-    void getProducts_withValidToken_shouldReturnOk()
+    void getProducts_withBuyerToken_shouldReturnOk()
             throws Exception {
 
         when(productService.getAllProducts())
@@ -125,7 +112,23 @@ class ProductControllerIntegrationTest {
     }
 
     @Test
-    void getProductById_withValidToken_shouldReturnProduct()
+    void getProducts_withSupplierToken_shouldReturnOk()
+            throws Exception {
+
+        when(productService.getAllProducts())
+                .thenReturn(List.of());
+
+        mockMvc.perform(get("/api/v1/products")
+                        .header(
+                                "Authorization",
+                                "Bearer " + createToken("SUPPLIER")
+                        ))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isArray());
+    }
+
+    @Test
+    void getProductById_withBuyerToken_shouldReturnProduct()
             throws Exception {
 
         Product product = new Product();
@@ -148,9 +151,31 @@ class ProductControllerIntegrationTest {
                 .andExpect(jsonPath("$.sku").value("TG-001"));
     }
 
+    // --------------------------------------------------
+    // CREATE PRODUCT
+    // --------------------------------------------------
 
     @Test
-    void createProduct_withValidToken_shouldReturnCreated()
+    void createProduct_withoutAuthentication_shouldReturnUnauthorized()
+            throws Exception {
+
+        mockMvc.perform(post("/api/v1/products")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                    "name": "Safety Gloves",
+                                    "description": "Industrial safety gloves",
+                                    "sku": "TG-001",
+                                    "unitPrice": 150.00,
+                                    "availableQuantity": 100,
+                                    "unit": "PAIR"
+                                }
+                                """))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void createProduct_withValidSupplierToken_shouldReturnCreated()
             throws Exception {
 
         Product product = new Product();
@@ -164,7 +189,7 @@ class ProductControllerIntegrationTest {
         mockMvc.perform(post("/api/v1/products")
                         .header(
                                 "Authorization",
-                                "Bearer " + createToken("BUYER")
+                                "Bearer " + createToken("SUPPLIER")
                         )
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
@@ -183,13 +208,69 @@ class ProductControllerIntegrationTest {
     }
 
     @Test
-    void createProduct_withInvalidData_shouldReturnBadRequest()
+    void createProduct_withAdminToken_shouldReturnCreated()
+            throws Exception {
+
+        Product product = new Product();
+        product.setName("Safety Helmet");
+        product.setDescription("Industrial safety helmet");
+        product.setSku("TH-001");
+
+        when(productService.createProduct(any(ProductRequest.class)))
+                .thenReturn(product);
+
+        mockMvc.perform(post("/api/v1/products")
+                        .header(
+                                "Authorization",
+                                "Bearer " + createToken("ADMIN")
+                        )
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                    "name": "Safety Helmet",
+                                    "description": "Industrial safety helmet",
+                                    "sku": "TH-001",
+                                    "unitPrice": 500.00,
+                                    "availableQuantity": 50,
+                                    "unit": "PIECE"
+                                }
+                                """))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.name").value("Safety Helmet"))
+                .andExpect(jsonPath("$.sku").value("TH-001"));
+    }
+
+    @Test
+    void createProduct_withBuyerToken_shouldReturnForbidden()
             throws Exception {
 
         mockMvc.perform(post("/api/v1/products")
                         .header(
                                 "Authorization",
                                 "Bearer " + createToken("BUYER")
+                        )
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                    "name": "Safety Gloves",
+                                    "description": "Industrial safety gloves",
+                                    "sku": "TG-001",
+                                    "unitPrice": 150.00,
+                                    "availableQuantity": 100,
+                                    "unit": "PAIR"
+                                }
+                                """))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void createProduct_withInvalidData_shouldReturnBadRequest()
+            throws Exception {
+
+        mockMvc.perform(post("/api/v1/products")
+                        .header(
+                                "Authorization",
+                                "Bearer " + createToken("SUPPLIER")
                         )
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
@@ -205,17 +286,22 @@ class ProductControllerIntegrationTest {
                 .andExpect(status().isBadRequest());
     }
 
+    // --------------------------------------------------
+    // TEST JWT CONFIGURATION
+    // --------------------------------------------------
+
     @TestConfiguration
     static class JwtTestConfiguration {
 
         private static final String TEST_SECRET =
                 Base64.getEncoder().encodeToString(
                         "tradeflow-integration-test-secret-key-32"
-                                .getBytes(java.nio.charset.StandardCharsets.UTF_8)
+                                .getBytes(StandardCharsets.UTF_8)
                 );
 
         @Bean
         SecretKey jwtSecretKey() {
+
             byte[] secretBytes =
                     Base64.getDecoder().decode(TEST_SECRET);
 
@@ -227,6 +313,7 @@ class ProductControllerIntegrationTest {
 
         @Bean
         JwtEncoder jwtEncoder(SecretKey jwtSecretKey) {
+
             return new NimbusJwtEncoder(
                     new ImmutableSecret<>(jwtSecretKey)
             );

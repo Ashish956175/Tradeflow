@@ -55,14 +55,15 @@ public class SecurityConfig {
     ) throws Exception {
 
         http
+                // Disable CSRF for the stateless REST API
                 .csrf(csrf -> csrf.disable())
 
+                // Use stateless authentication
                 .sessionManagement(session -> session
-                        .sessionCreationPolicy(
-                                SessionCreationPolicy.STATELESS
-                        )
+                        .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
                 )
 
+                // Configure authorization rules
                 .authorizeHttpRequests(auth -> auth
 
                         // Public health endpoint
@@ -103,7 +104,7 @@ public class SecurityConfig {
                                 "/api/v1/relationships"
                         ).hasRole("BUYER")
 
-                        // View buyer/supplier relationships
+                        // View buyer-supplier relationships
                         // Ownership is checked in RelationshipService
                         .requestMatchers(
                                 HttpMethod.GET,
@@ -123,7 +124,7 @@ public class SecurityConfig {
                                 "/api/v1/procurement-requests"
                         ).hasRole("BUYER")
 
-                        // Procurement reads
+                        // Procurement request reads
                         .requestMatchers(
                                 HttpMethod.GET,
                                 "/api/v1/procurement-requests",
@@ -161,10 +162,25 @@ public class SecurityConfig {
                                 "/api/v1/shipments"
                         ).hasRole("SUPPLIER")
 
-                        // All remaining endpoints require authentication
+                        // Product catalogue: buyers, suppliers, and admins can read
+                        .requestMatchers(
+                                HttpMethod.GET,
+                                "/api/v1/products",
+                                "/api/v1/products/**"
+                        ).hasAnyRole("BUYER", "SUPPLIER", "ADMIN")
+
+                        // Only suppliers and admins can create products
+                        .requestMatchers(
+                                HttpMethod.POST,
+                                "/api/v1/products"
+                        ).hasAnyRole("SUPPLIER", "ADMIN")
+
+                        // All remaining endpoints require authentication.
+                        // IMPORTANT: Keep this rule last.
                         .anyRequest().authenticated()
                 )
 
+                // Configure JWT authentication
                 .oauth2ResourceServer(oauth2 -> oauth2
                         .jwt(jwt -> jwt
                                 .jwtAuthenticationConverter(
