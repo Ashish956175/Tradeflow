@@ -153,4 +153,31 @@ class ProductServiceTest {
 
         verify(productRepository).findAll();
     }
+
+    @Test
+    void createProduct_shouldReturnProductSavedByRepository() {
+
+        when(productRepository.existsBySku("TF-MOUSE-001"))
+                .thenReturn(false);
+
+        Product savedProduct = new Product();
+        savedProduct.setName("Wireless Mouse");
+        savedProduct.setDescription("Wireless mouse with USB receiver");
+        savedProduct.setSku("TF-MOUSE-001");
+        savedProduct.setUnitPrice(new BigDecimal("799.00"));
+        savedProduct.setAvailableQuantity(50);
+        savedProduct.setUnit("piece");
+
+        when(productRepository.save(any(Product.class)))
+                .thenReturn(savedProduct);
+
+        Product result = productService.createProduct(validRequest);
+
+        assertSame(savedProduct, result);
+        assertEquals("Wireless Mouse", result.getName());
+        assertEquals("TF-MOUSE-001", result.getSku());
+
+        verify(productRepository).save(any(Product.class));
+    }
+
 }
