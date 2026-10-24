@@ -92,11 +92,18 @@ public class SecurityConfig {
                         ).hasRole("ADMIN")
 
                         // Organization reads
-                        .requestMatchers(
-                                HttpMethod.GET,
-                                "/api/v1/organizations",
-                                "/api/v1/organizations/**"
-                        ).authenticated()
+                                // Only administrators can list all organizations.
+                                .requestMatchers(
+                                        HttpMethod.GET,
+                                        "/api/v1/organizations"
+                                ).hasRole("ADMIN")
+
+                                // Authenticated users can request an organization by ID.
+                                // OrganizationService enforces ownership for non-admin users.
+                                .requestMatchers(
+                                        HttpMethod.GET,
+                                        "/api/v1/organizations/*"
+                                ).authenticated()
 
                         // Create a buyer-supplier relationship
                         .requestMatchers(
