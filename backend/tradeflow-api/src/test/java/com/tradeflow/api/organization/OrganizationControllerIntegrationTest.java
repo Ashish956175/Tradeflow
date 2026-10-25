@@ -363,28 +363,20 @@ class OrganizationControllerIntegrationTest {
     // ORGANIZATION ID VALIDATION
     // --------------------------------------------------
 
+
     @Test
     void invalidOrganizationIdIsRejected() throws Exception {
 
-        /*
-         * @Positive on the controller's path variable currently
-         * throws ConstraintViolationException.
-         *
-         * Until centralized validation exception handling is added,
-         * this test should be handled separately from HTTP response
-         * assertions.
-         */
-        org.junit.jupiter.api.Assertions.assertThrows(
-                jakarta.servlet.ServletException.class,
-                () -> mockMvc.perform(
-                        get(BASE_URL + "/0")
-                                .header(
-                                        "Authorization",
-                                        "Bearer " + buyerToken()
-                                )
-                )
-        );
+        mockMvc.perform(
+                get(BASE_URL + "/0")
+                        .header(
+                                "Authorization",
+                                "Bearer " + buyerToken()
+                        )
+        ).andExpect(status().isBadRequest());
     }
+
+
 
     // --------------------------------------------------
     // TEST JWT CONFIGURATION
