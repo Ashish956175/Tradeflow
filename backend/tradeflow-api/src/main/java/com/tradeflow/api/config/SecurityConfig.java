@@ -69,12 +69,17 @@ public class SecurityConfig {
                         // Public health endpoint
                         .requestMatchers(
                                 HttpMethod.GET,
-                                "/actuator/health"
+                                "/actuator/health",
+                                "/swagger-ui.html",
+                                "/swagger-ui/**",
+                                "/v3/api-docs",
+                                "/v3/api-docs/**"
                         ).permitAll()
 
                         // Public authentication endpoints
                         .requestMatchers(
                                 HttpMethod.POST,
+
                                 "/api/v1/auth/register",
                                 "/api/v1/auth/login"
                         ).permitAll()
