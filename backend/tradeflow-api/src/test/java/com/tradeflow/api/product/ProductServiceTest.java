@@ -132,7 +132,7 @@ class ProductServiceTest {
 
     // Bonus test: Return all products
     @Test
-    void getAllProducts_shouldReturnAllProducts() {
+    void getAllProducts_shouldReturnPaginatedProducts() {
 
         Product first = new Product();
         first.setName("Wireless Mouse");
@@ -142,17 +142,40 @@ class ProductServiceTest {
         second.setName("Mechanical Keyboard");
         second.setSku("TF-KEYBOARD-001");
 
-        when(productRepository.findAll())
-            .thenReturn(List.of(first, second));
+        org.springframework.data.domain.Page<Product> productPage =
+                new org.springframework.data.domain.PageImpl<>(
+                        List.of(first, second),
+                        org.springframework.data.domain.PageRequest.of(0, 10),
+                        2
+                );
 
-        List<Product> result = productService.getAllProducts();
+        when(productRepository.findAll(
+                org.mockito.ArgumentMatchers
+                        .<org.springframework.data.jpa.domain.Specification<Product>>any(),
+                org.mockito.ArgumentMatchers
+                        .any(org.springframework.data.domain.Pageable.class)
+        )).thenReturn(productPage);
 
-        assertEquals(2, result.size());
-        assertEquals("TF-MOUSE-001", result.get(0).getSku());
-        assertEquals("TF-KEYBOARD-001", result.get(1).getSku());
+        org.springframework.data.domain.Page<Product> result =
+                productService.getAllProducts(
+                        0, 10, "id", "asc",
+                        null, null, null, null
+                );
 
-        verify(productRepository).findAll();
+        assertEquals(2, result.getContent().size());
+        assertEquals(2, result.getTotalElements());
+        assertEquals("TF-MOUSE-001", result.getContent().get(0).getSku());
+        assertEquals("TF-KEYBOARD-001", result.getContent().get(1).getSku());
+
+        verify(productRepository).findAll(
+                org.mockito.ArgumentMatchers
+                        .<org.springframework.data.jpa.domain.Specification<Product>>any(),
+                org.mockito.ArgumentMatchers
+                        .any(org.springframework.data.domain.Pageable.class)
+        );
     }
+
+
 
     @Test
     void createProduct_shouldReturnProductSavedByRepository() {
@@ -178,6 +201,60 @@ class ProductServiceTest {
         assertEquals("TF-MOUSE-001", result.getSku());
 
         verify(productRepository).save(any(Product.class));
+    }
+    @Test
+    void getAllProducts_shouldRejectNegativeMinimumPrice() {
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> productService.getAllProducts(
+                        0, 10, "id", "asc",
+                        null, new BigDecimal("-1.00"), null, null
+                )
+        );
+
+        assertEquals(400, exception.getStatusCode().value());
+        assertEquals("Minimum price cannot be negative", exception.getReason());
+
+        verifyNoInteractions(productRepository);
+    }
+
+    @Test
+    void getAllProducts_shouldRejectMinimumPriceGreaterThanMaximumPrice() {
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> productService.getAllProducts(
+                        0, 10, "id", "asc",
+                        null, new BigDecimal("500.00"),
+                        new BigDecimal("100.00"), null
+                )
+        );
+
+        assertEquals(400, exception.getStatusCode().value());
+        assertEquals(
+                "Minimum price cannot exceed maximum price",
+                exception.getReason()
+        );
+
+        verifyNoInteractions(productRepository);
+    }
+
+    @Test
+    void getAllProducts_shouldRejectNegativeMinimumQuantity() {
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> productService.getAllProducts(
+                        0, 10, "id", "asc",
+                        null, null, null, -1
+                )
+        );
+
+        assertEquals(400, exception.getStatusCode().value());
+        assertEquals("Minimum quantity cannot be negative", exception.getReason());
+
+        verifyNoInteractions(productRepository);
     }
 
 }

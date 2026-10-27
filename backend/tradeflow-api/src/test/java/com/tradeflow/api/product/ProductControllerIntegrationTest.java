@@ -96,11 +96,19 @@ class ProductControllerIntegrationTest {
     }
 
     @Test
-    void getProducts_withBuyerToken_shouldReturnOk()
-            throws Exception {
+    void getProducts_withBuyerToken_shouldReturnOk() throws Exception {
 
-        when(productService.getAllProducts())
-                .thenReturn(List.of());
+        org.springframework.data.domain.Page<Product> productPage =
+                new org.springframework.data.domain.PageImpl<>(
+                        List.of(),
+                        org.springframework.data.domain.PageRequest.of(0, 10),
+                        0
+                );
+
+        when(productService.getAllProducts(
+                0, 10, "id", "asc",
+                null, null, null, null
+        )).thenReturn(productPage);
 
         mockMvc.perform(get("/api/v1/products")
                         .header(
@@ -108,15 +116,25 @@ class ProductControllerIntegrationTest {
                                 "Bearer " + createToken("BUYER")
                         ))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$").isArray());
+                .andExpect(jsonPath("$.content").isArray())
+                .andExpect(jsonPath("$.totalElements").value(0))
+                .andExpect(jsonPath("$.totalPages").value(0));
     }
 
     @Test
-    void getProducts_withSupplierToken_shouldReturnOk()
-            throws Exception {
+    void getProducts_withSupplierToken_shouldReturnOk() throws Exception {
 
-        when(productService.getAllProducts())
-                .thenReturn(List.of());
+        org.springframework.data.domain.Page<Product> productPage =
+                new org.springframework.data.domain.PageImpl<>(
+                        List.of(),
+                        org.springframework.data.domain.PageRequest.of(0, 10),
+                        0
+                );
+
+        when(productService.getAllProducts(
+                0, 10, "id", "asc",
+                null, null, null, null
+        )).thenReturn(productPage);
 
         mockMvc.perform(get("/api/v1/products")
                         .header(
@@ -124,8 +142,11 @@ class ProductControllerIntegrationTest {
                                 "Bearer " + createToken("SUPPLIER")
                         ))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$").isArray());
+                .andExpect(jsonPath("$.content").isArray())
+                .andExpect(jsonPath("$.totalElements").value(0))
+                .andExpect(jsonPath("$.totalPages").value(0));
     }
+
 
     @Test
     void getProductById_withBuyerToken_shouldReturnProduct()
