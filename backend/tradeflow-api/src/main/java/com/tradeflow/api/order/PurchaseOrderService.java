@@ -1,5 +1,6 @@
 package com.tradeflow.api.order;
 
+
 import com.tradeflow.api.organization.Organization;
 import com.tradeflow.api.procurement.ProcurementRequest;
 import com.tradeflow.api.quotation.Quotation;
@@ -14,6 +15,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import com.tradeflow.api.product.ProductRepository;
+
 import java.util.List;
 import java.util.Locale;
 
@@ -23,15 +26,18 @@ public class PurchaseOrderService {
     private final PurchaseOrderRepository purchaseOrderRepository;
     private final QuotationRepository quotationRepository;
     private final UserRepository userRepository;
+    private final ProductRepository productRepository;
 
     public PurchaseOrderService(
             PurchaseOrderRepository purchaseOrderRepository,
             QuotationRepository quotationRepository,
-            UserRepository userRepository
+            UserRepository userRepository,
+            ProductRepository productRepository
     ) {
         this.purchaseOrderRepository = purchaseOrderRepository;
         this.quotationRepository = quotationRepository;
         this.userRepository = userRepository;
+        this.productRepository = productRepository;
     }
 
     // A buyer can create an order only from their own accepted quotation.
@@ -138,6 +144,7 @@ public class PurchaseOrderService {
     }
 
     // Only administrators can confirm orders.
+    // Only administrators can confirm orders and reserve inventory.
     @Transactional
     public PurchaseOrder confirmOrder(
             Long id,
@@ -146,7 +153,43 @@ public class PurchaseOrderService {
         User user = getAuthenticatedUser(authenticatedEmail);
         requireRole(user, UserRole.ADMIN);
 
-        PurchaseOrder order = findOrderById(id);
+        PurchaseOrder order = purchaseOrderRepository.findByIdForUpdate(id)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "Purchase order not found"
+                ));
+
+        if (order.getStatus() != OrderStatus.CREATED) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Only CREATED orders can be confirmed"
+            );
+        }
+
+        if (order.getOrderedQuantity() == null
+                || order.getOrderedQuantity() <= 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Order quantity must be greater than zero"
+            );
+        }
+
+        Long productId = order.getQuotation()
+                .getProcurementRequest()
+                .getProduct()
+                .getId();
+
+        int reserved = productRepository.reserveInventory(
+                productId,
+                order.getOrderedQuantity()
+        );
+
+        if (reserved != 1) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Insufficient inventory or product not found"
+            );
+        }
 
         try {
             order.confirm();
@@ -207,6 +250,7 @@ public class PurchaseOrderService {
     }
 
     // Only administrators can cancel orders.
+    // Only administrators can cancel orders and release reserved inventory.
     @Transactional
     public PurchaseOrder cancelOrder(
             Long id,
@@ -215,7 +259,13 @@ public class PurchaseOrderService {
         User user = getAuthenticatedUser(authenticatedEmail);
         requireRole(user, UserRole.ADMIN);
 
-        PurchaseOrder order = findOrderById(id);
+        PurchaseOrder order = purchaseOrderRepository.findByIdForUpdate(id)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "Purchase order not found"
+                ));
+
+        OrderStatus previousStatus = order.getStatus();
 
         try {
             order.cancel();
@@ -226,9 +276,27 @@ public class PurchaseOrderService {
             );
         }
 
+        if (previousStatus == OrderStatus.CONFIRMED) {
+            Long productId = order.getQuotation()
+                    .getProcurementRequest()
+                    .getProduct()
+                    .getId();
+
+            int released = productRepository.releaseInventory(
+                    productId,
+                    order.getOrderedQuantity()
+            );
+
+            if (released != 1) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Unable to release reserved inventory"
+                );
+            }
+        }
+
         return purchaseOrderRepository.save(order);
     }
-
     private PurchaseOrder findOrderById(Long id) {
         return purchaseOrderRepository.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(
