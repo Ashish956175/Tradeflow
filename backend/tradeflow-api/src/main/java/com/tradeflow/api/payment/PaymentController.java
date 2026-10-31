@@ -25,7 +25,7 @@ public class PaymentController {
     // Create a payment for a confirmed purchase order
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    public Payment createPayment(
+    public PaymentResponse createPayment(
             @Valid @RequestBody PaymentRequest request,
             @AuthenticationPrincipal Jwt jwt
     ) {
@@ -37,7 +37,7 @@ public class PaymentController {
 
     // Retrieve all payments (admin only, enforced in service)
     @GetMapping
-    public List<Payment> getAllPayments(
+    public List<PaymentResponse> getAllPayments(
             @AuthenticationPrincipal Jwt jwt
     ) {
         return paymentService.getAllPayments(jwt.getSubject());
@@ -45,7 +45,7 @@ public class PaymentController {
 
     // Retrieve a payment by its ID
     @GetMapping("/{id}")
-    public Payment getPaymentById(
+    public PaymentResponse getPaymentById(
             @PathVariable
             @Positive(message = "Payment ID must be positive")
             Long id,
@@ -59,7 +59,7 @@ public class PaymentController {
 
     // Retrieve a payment by purchase order ID
     @GetMapping("/order/{purchaseOrderId}")
-    public Payment getPaymentByOrderId(
+    public PaymentResponse getPaymentByOrderId(
             @PathVariable
             @Positive(message = "Purchase order ID must be positive")
             Long purchaseOrderId,
@@ -73,7 +73,7 @@ public class PaymentController {
 
     // Filter payments by status (admin only, enforced in service)
     @GetMapping("/status/{status}")
-    public List<Payment> getPaymentsByStatus(
+    public List<PaymentResponse> getPaymentsByStatus(
             @PathVariable PaymentStatus status,
             @AuthenticationPrincipal Jwt jwt
     ) {
@@ -85,7 +85,7 @@ public class PaymentController {
 
     // Simulate successful payment processing
     @PatchMapping("/{id}/complete")
-    public Payment markPaymentAsCompleted(
+    public PaymentResponse markPaymentAsCompleted(
             @PathVariable
             @Positive(message = "Payment ID must be positive")
             Long id,
@@ -99,7 +99,7 @@ public class PaymentController {
 
     // Simulate failed payment processing
     @PatchMapping("/{id}/fail")
-    public Payment markPaymentAsFailed(
+    public PaymentResponse markPaymentAsFailed(
             @PathVariable
             @Positive(message = "Payment ID must be positive")
             Long id,

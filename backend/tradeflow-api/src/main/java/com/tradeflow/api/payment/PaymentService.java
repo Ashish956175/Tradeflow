@@ -33,9 +33,9 @@ public class PaymentService {
         this.userRepository = userRepository;
     }
 
-    // Create a payment for a confirmed order owned by the buyer.
+    // Create payment for a confirmed order owned by the buyer.
     @Transactional
-    public Payment createPayment(
+    public PaymentResponse createPayment(
             PaymentRequest request,
             String authenticatedEmail
     ) {
@@ -71,40 +71,43 @@ public class PaymentService {
 
         Payment payment = new Payment(order, paymentMethod);
 
-        return paymentRepository.save(payment);
+        Payment savedPayment = paymentRepository.save(payment);
+
+        return PaymentResponse.from(savedPayment);
     }
 
-    // Only administrators can view every payment.
+    // Only administrators can retrieve all payments.
     @Transactional(readOnly = true)
-    public List<Payment> getAllPayments(String authenticatedEmail) {
+    public List<PaymentResponse> getAllPayments(
+            String authenticatedEmail
+    ) {
         User user = getAuthenticatedUser(authenticatedEmail);
         requireRole(user, UserRole.ADMIN);
 
-        return paymentRepository.findAll();
+        return paymentRepository.findAll()
+                .stream()
+                .map(PaymentResponse::from)
+                .toList();
     }
 
-    // Retrieve one payment after checking organization ownership.
+    // Retrieve payment by ID after verifying organization ownership.
     @Transactional(readOnly = true)
-    public Payment getPaymentById(
+    public PaymentResponse getPaymentById(
             Long paymentId,
             String authenticatedEmail
     ) {
         User user = getAuthenticatedUser(authenticatedEmail);
 
-        Payment payment = paymentRepository.findById(paymentId)
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.NOT_FOUND,
-                        "Payment not found"
-                ));
+        Payment payment = findPayment(paymentId);
 
         verifyPaymentAccess(user, payment.getPurchaseOrder());
 
-        return payment;
+        return PaymentResponse.from(payment);
     }
 
-    // Retrieve a payment for an order the user is authorized to access.
+    // Retrieve payment using purchase order ID.
     @Transactional(readOnly = true)
-    public Payment getPaymentByOrderId(
+    public PaymentResponse getPaymentByOrderId(
             Long purchaseOrderId,
             String authenticatedEmail
     ) {
@@ -119,28 +122,34 @@ public class PaymentService {
 
         verifyPaymentAccess(user, order);
 
-        return paymentRepository.findByPurchaseOrder_Id(purchaseOrderId)
+        Payment payment = paymentRepository
+                .findByPurchaseOrder_Id(purchaseOrderId)
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND,
                         "Payment not found for this purchase order"
                 ));
+
+        return PaymentResponse.from(payment);
     }
 
-    // Only administrators can query payments across organizations by status.
+    // Only administrators can filter payments by status.
     @Transactional(readOnly = true)
-    public List<Payment> getPaymentsByStatus(
+    public List<PaymentResponse> getPaymentsByStatus(
             PaymentStatus status,
             String authenticatedEmail
     ) {
         User user = getAuthenticatedUser(authenticatedEmail);
         requireRole(user, UserRole.ADMIN);
 
-        return paymentRepository.findByStatus(status);
+        return paymentRepository.findByStatus(status)
+                .stream()
+                .map(PaymentResponse::from)
+                .toList();
     }
 
-    // For prototype/testing use: only an administrator can update the status.
+    // Simulated payment completion for prototype/testing.
     @Transactional
-    public Payment markPaymentAsCompleted(
+    public PaymentResponse markPaymentAsCompleted(
             Long paymentId,
             String authenticatedEmail
     ) {
@@ -148,16 +157,19 @@ public class PaymentService {
         requireRole(user, UserRole.ADMIN);
 
         Payment payment = findPayment(paymentId);
+
         requirePendingStatus(payment);
 
         payment.setStatus(PaymentStatus.COMPLETED);
 
-        return paymentRepository.save(payment);
+        Payment savedPayment = paymentRepository.save(payment);
+
+        return PaymentResponse.from(savedPayment);
     }
 
-    // For prototype/testing use: only an administrator can update the status.
+    // Simulated payment failure for prototype/testing.
     @Transactional
-    public Payment markPaymentAsFailed(
+    public PaymentResponse markPaymentAsFailed(
             Long paymentId,
             String authenticatedEmail
     ) {
@@ -165,13 +177,17 @@ public class PaymentService {
         requireRole(user, UserRole.ADMIN);
 
         Payment payment = findPayment(paymentId);
+
         requirePendingStatus(payment);
 
         payment.setStatus(PaymentStatus.FAILED);
 
-        return paymentRepository.save(payment);
+        Payment savedPayment = paymentRepository.save(payment);
+
+        return PaymentResponse.from(savedPayment);
     }
 
+    // Find payment or throw 404.
     private Payment findPayment(Long paymentId) {
         return paymentRepository.findById(paymentId)
                 .orElseThrow(() -> new ResponseStatusException(
@@ -180,7 +196,9 @@ public class PaymentService {
                 ));
     }
 
+    // Retrieve authenticated and enabled user.
     private User getAuthenticatedUser(String email) {
+
         String normalizedEmail = email.trim()
                 .toLowerCase(Locale.ROOT);
 
@@ -200,7 +218,11 @@ public class PaymentService {
         return user;
     }
 
-    private void requireRole(User user, UserRole requiredRole) {
+    // Verify user role.
+    private void requireRole(
+            User user,
+            UserRole requiredRole
+    ) {
         if (user.getRole() != requiredRole) {
             throw new ResponseStatusException(
                     HttpStatus.FORBIDDEN,
@@ -209,7 +231,9 @@ public class PaymentService {
         }
     }
 
+    // Retrieve organization associated with the user.
     private Organization requireOrganization(User user) {
+
         Organization organization = user.getOrganization();
 
         if (organization == null) {
@@ -222,6 +246,7 @@ public class PaymentService {
         return organization;
     }
 
+    // Verify buyer owns the purchase order.
     private void verifyBuyerOwnsOrder(
             User user,
             PurchaseOrder order
@@ -241,17 +266,22 @@ public class PaymentService {
         }
     }
 
+    // Verify buyer, supplier or administrator can access the payment.
     private void verifyPaymentAccess(
             User user,
             PurchaseOrder order
     ) {
+
+        // Administrators have unrestricted payment access.
         if (user.getRole() == UserRole.ADMIN) {
             return;
         }
 
         Organization organization = requireOrganization(user);
 
+        // Buyer organization verification.
         if (user.getRole() == UserRole.BUYER) {
+
             Long buyerOrganizationId = order.getQuotation()
                     .getProcurementRequest()
                     .getBuyerOrganization()
@@ -262,7 +292,9 @@ public class PaymentService {
             }
         }
 
+        // Supplier organization verification.
         if (user.getRole() == UserRole.SUPPLIER) {
+
             Long supplierOrganizationId = order.getQuotation()
                     .getSupplier()
                     .getOrganization()
@@ -279,7 +311,9 @@ public class PaymentService {
         );
     }
 
+    // Only pending payments can be completed or failed.
     private void requirePendingStatus(Payment payment) {
+
         if (payment.getStatus() != PaymentStatus.PENDING) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
