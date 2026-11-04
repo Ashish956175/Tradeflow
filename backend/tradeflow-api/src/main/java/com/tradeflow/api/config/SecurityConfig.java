@@ -186,7 +186,11 @@ public class SecurityConfig {
                                 HttpMethod.POST,
                                 "/api/v1/products"
                         ).hasAnyRole("SUPPLIER", "ADMIN")
-
+                        // Manual inventory stock-in: admin only
+                        .requestMatchers(
+                                HttpMethod.POST,
+                                "/api/v1/inventory/stock-in"
+                        ).hasRole("ADMIN")
                         // All remaining endpoints require authentication.
                         // IMPORTANT: Keep this rule last.
                         .anyRequest().authenticated()
