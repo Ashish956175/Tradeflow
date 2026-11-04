@@ -15,7 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
-import com.tradeflow.api.product.ProductRepository;
+import com.tradeflow.api.inventory.InventoryService;
 
 import java.util.List;
 import java.util.Locale;
@@ -26,18 +26,18 @@ public class PurchaseOrderService {
     private final PurchaseOrderRepository purchaseOrderRepository;
     private final QuotationRepository quotationRepository;
     private final UserRepository userRepository;
-    private final ProductRepository productRepository;
+    private final InventoryService inventoryService;
 
     public PurchaseOrderService(
             PurchaseOrderRepository purchaseOrderRepository,
             QuotationRepository quotationRepository,
             UserRepository userRepository,
-            ProductRepository productRepository
+            InventoryService inventoryService
     ) {
         this.purchaseOrderRepository = purchaseOrderRepository;
         this.quotationRepository = quotationRepository;
         this.userRepository = userRepository;
-        this.productRepository = productRepository;
+        this.inventoryService = inventoryService;
     }
 
     // A buyer can create an order only from their own accepted quotation.
@@ -179,17 +179,12 @@ public class PurchaseOrderService {
                 .getProduct()
                 .getId();
 
-        int reserved = productRepository.reserveInventory(
+        inventoryService.reserveForOrder(
                 productId,
-                order.getOrderedQuantity()
+                order.getOrderedQuantity(),
+                user,
+                order
         );
-
-        if (reserved != 1) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "Insufficient inventory or product not found"
-            );
-        }
 
         try {
             order.confirm();
@@ -282,17 +277,12 @@ public class PurchaseOrderService {
                     .getProduct()
                     .getId();
 
-            int released = productRepository.releaseInventory(
+            inventoryService.releaseForOrder(
                     productId,
-                    order.getOrderedQuantity()
+                    order.getOrderedQuantity(),
+                    user,
+                    order
             );
-
-            if (released != 1) {
-                throw new ResponseStatusException(
-                        HttpStatus.CONFLICT,
-                        "Unable to release reserved inventory"
-                );
-            }
         }
 
         return purchaseOrderRepository.save(order);
@@ -404,3 +394,5 @@ public class PurchaseOrderService {
         );
     }
 }
+
+

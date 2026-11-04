@@ -1,7 +1,7 @@
 package com.tradeflow.api.order;
 
+import com.tradeflow.api.inventory.InventoryService;
 import com.tradeflow.api.product.Product;
-import com.tradeflow.api.product.ProductRepository;
 import com.tradeflow.api.procurement.ProcurementRequest;
 import com.tradeflow.api.quotation.Quotation;
 import com.tradeflow.api.quotation.QuotationRepository;
@@ -17,6 +17,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Optional;
@@ -43,7 +44,7 @@ class PurchaseOrderServiceTest {
     private UserRepository userRepository;
 
     @Mock
-    private ProductRepository productRepository;
+    private InventoryService inventoryService;
 
     @InjectMocks
     private PurchaseOrderService purchaseOrderService;
@@ -89,7 +90,6 @@ class PurchaseOrderServiceTest {
     // Purchase order setup helper
     // --------------------------------------------------
 
-
     private void configureOrder(OrderStatus status, int quantity) {
         when(purchaseOrderRepository.findByIdForUpdate(ORDER_ID))
                 .thenReturn(Optional.of(order));
@@ -97,8 +97,6 @@ class PurchaseOrderServiceTest {
         when(order.getStatus()).thenReturn(status);
         when(order.getOrderedQuantity()).thenReturn(quantity);
     }
-
-
 
     private void configureProductRelationship() {
         when(order.getQuotation()).thenReturn(quotation);
@@ -112,7 +110,6 @@ class PurchaseOrderServiceTest {
         when(product.getId()).thenReturn(PRODUCT_ID);
     }
 
-
     // --------------------------------------------------
     // Confirm order tests
     // --------------------------------------------------
@@ -122,9 +119,6 @@ class PurchaseOrderServiceTest {
         authenticateAdmin();
         configureOrder(OrderStatus.CREATED, 5);
         configureProductRelationship();
-
-        when(productRepository.reserveInventory(PRODUCT_ID, 5))
-                .thenReturn(1);
 
         when(purchaseOrderRepository.save(order))
                 .thenReturn(order);
@@ -136,15 +130,23 @@ class PurchaseOrderServiceTest {
 
         assertSame(order, result);
 
-        verify(productRepository)
-                .reserveInventory(PRODUCT_ID, 5);
+        verify(inventoryService).reserveForOrder(
+                PRODUCT_ID,
+                5,
+                admin,
+                order
+        );
 
         verify(order).confirm();
 
         verify(purchaseOrderRepository).save(order);
 
-        verify(productRepository, never())
-                .releaseInventory(anyLong(), anyInt());
+        verify(inventoryService, never()).releaseForOrder(
+                anyLong(),
+                anyInt(),
+                any(User.class),
+                any(PurchaseOrder.class)
+        );
     }
 
     @Test
@@ -153,8 +155,15 @@ class PurchaseOrderServiceTest {
         configureOrder(OrderStatus.CREATED, 5);
         configureProductRelationship();
 
-        when(productRepository.reserveInventory(PRODUCT_ID, 5))
-                .thenReturn(0);
+        doThrow(new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "Insufficient inventory for this order"
+        )).when(inventoryService).reserveForOrder(
+                PRODUCT_ID,
+                5,
+                admin,
+                order
+        );
 
         ResponseStatusException exception = assertThrows(
                 ResponseStatusException.class,
@@ -166,8 +175,12 @@ class PurchaseOrderServiceTest {
 
         assertEquals(409, exception.getStatusCode().value());
 
-        verify(productRepository)
-                .reserveInventory(PRODUCT_ID, 5);
+        verify(inventoryService).reserveForOrder(
+                PRODUCT_ID,
+                5,
+                admin,
+                order
+        );
 
         verify(order, never()).confirm();
 
@@ -177,6 +190,7 @@ class PurchaseOrderServiceTest {
     @Test
     void confirmOrder_shouldRejectAlreadyConfirmedOrder() {
         authenticateAdmin();
+
         when(purchaseOrderRepository.findByIdForUpdate(ORDER_ID))
                 .thenReturn(Optional.of(order));
 
@@ -192,8 +206,12 @@ class PurchaseOrderServiceTest {
 
         assertEquals(409, exception.getStatusCode().value());
 
-        verify(productRepository, never())
-                .reserveInventory(anyLong(), anyInt());
+        verify(inventoryService, never()).reserveForOrder(
+                anyLong(),
+                anyInt(),
+                any(User.class),
+                any(PurchaseOrder.class)
+        );
 
         verify(order, never()).confirm();
 
@@ -215,8 +233,12 @@ class PurchaseOrderServiceTest {
 
         assertEquals(409, exception.getStatusCode().value());
 
-        verify(productRepository, never())
-                .reserveInventory(anyLong(), anyInt());
+        verify(inventoryService, never()).reserveForOrder(
+                anyLong(),
+                anyInt(),
+                any(User.class),
+                any(PurchaseOrder.class)
+        );
 
         verify(order, never()).confirm();
 
@@ -238,8 +260,12 @@ class PurchaseOrderServiceTest {
 
         assertEquals(409, exception.getStatusCode().value());
 
-        verify(productRepository, never())
-                .reserveInventory(anyLong(), anyInt());
+        verify(inventoryService, never()).reserveForOrder(
+                anyLong(),
+                anyInt(),
+                any(User.class),
+                any(PurchaseOrder.class)
+        );
 
         verify(order, never()).confirm();
 
@@ -260,7 +286,7 @@ class PurchaseOrderServiceTest {
 
         assertEquals(403, exception.getStatusCode().value());
 
-        verifyNoInteractions(productRepository);
+        verifyNoInteractions(inventoryService);
 
         verify(purchaseOrderRepository, never())
                 .findByIdForUpdate(anyLong());
@@ -276,9 +302,6 @@ class PurchaseOrderServiceTest {
         configureOrder(OrderStatus.CONFIRMED, 5);
         configureProductRelationship();
 
-        when(productRepository.releaseInventory(PRODUCT_ID, 5))
-                .thenReturn(1);
-
         when(purchaseOrderRepository.save(order))
                 .thenReturn(order);
 
@@ -291,8 +314,12 @@ class PurchaseOrderServiceTest {
 
         verify(order).cancel();
 
-        verify(productRepository)
-                .releaseInventory(PRODUCT_ID, 5);
+        verify(inventoryService).releaseForOrder(
+                PRODUCT_ID,
+                5,
+                admin,
+                order
+        );
 
         verify(purchaseOrderRepository).save(order);
     }
@@ -300,6 +327,7 @@ class PurchaseOrderServiceTest {
     @Test
     void cancelOrder_shouldNotReleaseInventoryForCreatedOrder() {
         authenticateAdmin();
+
         when(purchaseOrderRepository.findByIdForUpdate(ORDER_ID))
                 .thenReturn(Optional.of(order));
 
@@ -317,8 +345,12 @@ class PurchaseOrderServiceTest {
 
         verify(order).cancel();
 
-        verify(productRepository, never())
-                .releaseInventory(anyLong(), anyInt());
+        verify(inventoryService, never()).releaseForOrder(
+                anyLong(),
+                anyInt(),
+                any(User.class),
+                any(PurchaseOrder.class)
+        );
 
         verify(purchaseOrderRepository).save(order);
     }
@@ -326,6 +358,7 @@ class PurchaseOrderServiceTest {
     @Test
     void cancelOrder_shouldRejectShippedOrder() {
         authenticateAdmin();
+
         when(purchaseOrderRepository.findByIdForUpdate(ORDER_ID))
                 .thenReturn(Optional.of(order));
 
@@ -347,8 +380,12 @@ class PurchaseOrderServiceTest {
 
         verify(order).cancel();
 
-        verify(productRepository, never())
-                .releaseInventory(anyLong(), anyInt());
+        verify(inventoryService, never()).releaseForOrder(
+                anyLong(),
+                anyInt(),
+                any(User.class),
+                any(PurchaseOrder.class)
+        );
 
         verify(purchaseOrderRepository, never()).save(any());
     }
@@ -367,7 +404,7 @@ class PurchaseOrderServiceTest {
 
         assertEquals(403, exception.getStatusCode().value());
 
-        verifyNoInteractions(productRepository);
+        verifyNoInteractions(inventoryService);
 
         verify(purchaseOrderRepository, never())
                 .findByIdForUpdate(anyLong());
@@ -379,8 +416,15 @@ class PurchaseOrderServiceTest {
         configureOrder(OrderStatus.CONFIRMED, 5);
         configureProductRelationship();
 
-        when(productRepository.releaseInventory(PRODUCT_ID, 5))
-                .thenReturn(0);
+        doThrow(new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "Inventory release failed"
+        )).when(inventoryService).releaseForOrder(
+                PRODUCT_ID,
+                5,
+                admin,
+                order
+        );
 
         ResponseStatusException exception = assertThrows(
                 ResponseStatusException.class,
@@ -394,10 +438,13 @@ class PurchaseOrderServiceTest {
 
         verify(order).cancel();
 
-        verify(productRepository)
-                .releaseInventory(PRODUCT_ID, 5);
+        verify(inventoryService).releaseForOrder(
+                PRODUCT_ID,
+                5,
+                admin,
+                order
+        );
 
         verify(purchaseOrderRepository, never()).save(any());
     }
-
 }
