@@ -27,4 +27,15 @@ public class InventoryController {
                 authentication.getName()
         );
     }
+    @PostMapping("/adjust")
+    @ResponseStatus(HttpStatus.OK)
+    public Product adjustStock(
+            @Valid @RequestBody StockAdjustmentRequest request,
+            Authentication authentication
+    ) {
+        return inventoryService.adjustStock(
+                request,
+                authentication.getName()
+        );
+    }
 }

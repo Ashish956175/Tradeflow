@@ -294,4 +294,257 @@ class InventoryServiceTest {
         verify(productRepository, never()).save(any(Product.class));
         verifyNoInteractions(transactionRepository);
     }
+
+    // --------------------------------------------------
+    // Stock adjustment tests
+    // --------------------------------------------------
+
+    @Test
+    void adjustStock_shouldIncreaseQuantityAndRecordTransaction() {
+
+        authenticateAdmin();
+
+        when(product.getAvailableQuantity()).thenReturn(100);
+
+        when(productRepository.findByIdForUpdate(PRODUCT_ID))
+                .thenReturn(Optional.of(product));
+
+        when(productRepository.save(product)).thenReturn(product);
+
+        StockAdjustmentRequest request = new StockAdjustmentRequest(
+                PRODUCT_ID,
+                50,
+                "Physical stock count found 50 additional units"
+        );
+
+        Product response = inventoryService.adjustStock(
+                request,
+                ADMIN_EMAIL
+        );
+
+        assertNotNull(response);
+
+        verify(product).setAvailableQuantity(150);
+        verify(productRepository).save(product);
+
+        ArgumentCaptor<InventoryTransaction> captor =
+                ArgumentCaptor.forClass(InventoryTransaction.class);
+
+        verify(transactionRepository).save(captor.capture());
+
+        InventoryTransaction transaction = captor.getValue();
+
+        assertEquals(InventoryTransactionType.ADJUSTMENT,
+                transaction.getTransactionType());
+        assertEquals(50, transaction.getQuantity());
+        assertEquals(100, transaction.getPreviousQuantity());
+        assertEquals(150, transaction.getNewQuantity());
+        assertEquals(
+                "Physical stock count found 50 additional units",
+                transaction.getReason()
+        );
+        assertNull(transaction.getPurchaseOrder());
+        assertEquals(admin, transaction.getPerformedBy());
+    }
+
+    @Test
+    void adjustStock_shouldDecreaseQuantityAndRecordTransaction() {
+
+        authenticateAdmin();
+
+        when(product.getAvailableQuantity()).thenReturn(100);
+
+        when(productRepository.findByIdForUpdate(PRODUCT_ID))
+                .thenReturn(Optional.of(product));
+
+        when(productRepository.save(product)).thenReturn(product);
+
+        StockAdjustmentRequest request = new StockAdjustmentRequest(
+                PRODUCT_ID,
+                -30,
+                "30 units damaged during storage"
+        );
+
+        Product response = inventoryService.adjustStock(
+                request,
+                ADMIN_EMAIL
+        );
+
+        assertNotNull(response);
+
+        verify(product).setAvailableQuantity(70);
+        verify(productRepository).save(product);
+
+        ArgumentCaptor<InventoryTransaction> captor =
+                ArgumentCaptor.forClass(InventoryTransaction.class);
+
+        verify(transactionRepository).save(captor.capture());
+
+        InventoryTransaction transaction = captor.getValue();
+
+        assertEquals(InventoryTransactionType.ADJUSTMENT,
+                transaction.getTransactionType());
+        assertEquals(30, transaction.getQuantity());
+        assertEquals(100, transaction.getPreviousQuantity());
+        assertEquals(70, transaction.getNewQuantity());
+        assertEquals(
+                "30 units damaged during storage",
+                transaction.getReason()
+        );
+    }
+
+    @Test
+    void adjustStock_shouldRejectZeroQuantity() {
+
+        authenticateAdmin();
+
+        StockAdjustmentRequest request = new StockAdjustmentRequest(
+                PRODUCT_ID,
+                0,
+                "Stock correction"
+        );
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.adjustStock(request, ADMIN_EMAIL)
+        );
+
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getStatusCode());
+
+        verifyNoInteractions(productRepository);
+        verifyNoInteractions(transactionRepository);
+    }
+
+    @Test
+    void adjustStock_shouldRejectAdjustmentBelowZero() {
+
+        authenticateAdmin();
+
+        when(product.getAvailableQuantity()).thenReturn(20);
+
+        when(productRepository.findByIdForUpdate(PRODUCT_ID))
+                .thenReturn(Optional.of(product));
+
+        StockAdjustmentRequest request = new StockAdjustmentRequest(
+                PRODUCT_ID,
+                -30,
+                "Damaged stock correction"
+        );
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.adjustStock(request, ADMIN_EMAIL)
+        );
+
+        assertEquals(HttpStatus.CONFLICT, exception.getStatusCode());
+
+        verify(product, never()).setAvailableQuantity(anyInt());
+        verify(productRepository, never()).save(any(Product.class));
+        verifyNoInteractions(transactionRepository);
+    }
+
+    @Test
+    void adjustStock_shouldRejectIntegerOverflow() {
+
+        authenticateAdmin();
+
+        when(product.getAvailableQuantity())
+                .thenReturn(Integer.MAX_VALUE - 10);
+
+        when(productRepository.findByIdForUpdate(PRODUCT_ID))
+                .thenReturn(Optional.of(product));
+
+        StockAdjustmentRequest request = new StockAdjustmentRequest(
+                PRODUCT_ID,
+                100,
+                "Stock correction"
+        );
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.adjustStock(request, ADMIN_EMAIL)
+        );
+
+        assertEquals(HttpStatus.CONFLICT, exception.getStatusCode());
+
+        verify(product, never()).setAvailableQuantity(anyInt());
+        verify(productRepository, never()).save(any(Product.class));
+        verifyNoInteractions(transactionRepository);
+    }
+
+    @Test
+    void adjustStock_shouldRejectBuyer() {
+
+        when(buyer.isEnabled()).thenReturn(true);
+        when(buyer.getRole()).thenReturn(UserRole.BUYER);
+
+        when(userRepository.findByEmail(ADMIN_EMAIL))
+                .thenReturn(Optional.of(buyer));
+
+        StockAdjustmentRequest request = new StockAdjustmentRequest(
+                PRODUCT_ID,
+                50,
+                "Stock correction"
+        );
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.adjustStock(request, ADMIN_EMAIL)
+        );
+
+        assertEquals(HttpStatus.FORBIDDEN, exception.getStatusCode());
+
+        verifyNoInteractions(productRepository);
+        verifyNoInteractions(transactionRepository);
+    }
+
+    @Test
+    void adjustStock_shouldRejectDisabledAdmin() {
+
+        when(admin.isEnabled()).thenReturn(false);
+
+        when(userRepository.findByEmail(ADMIN_EMAIL))
+                .thenReturn(Optional.of(admin));
+
+        StockAdjustmentRequest request = new StockAdjustmentRequest(
+                PRODUCT_ID,
+                50,
+                "Stock correction"
+        );
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.adjustStock(request, ADMIN_EMAIL)
+        );
+
+        assertEquals(HttpStatus.FORBIDDEN, exception.getStatusCode());
+
+        verifyNoInteractions(productRepository);
+        verifyNoInteractions(transactionRepository);
+    }
+
+    @Test
+    void adjustStock_shouldRejectNonexistentProduct() {
+
+        authenticateAdmin();
+
+        when(productRepository.findByIdForUpdate(PRODUCT_ID))
+                .thenReturn(Optional.empty());
+
+        StockAdjustmentRequest request = new StockAdjustmentRequest(
+                PRODUCT_ID,
+                50,
+                "Stock correction"
+        );
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.adjustStock(request, ADMIN_EMAIL)
+        );
+
+        assertEquals(HttpStatus.NOT_FOUND, exception.getStatusCode());
+
+        verify(productRepository, never()).save(any(Product.class));
+        verifyNoInteractions(transactionRepository);
+    }
 }

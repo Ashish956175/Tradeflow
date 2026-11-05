@@ -70,6 +70,64 @@ public class InventoryService {
         return product;
     }
 
+    // Admin manually adjusts stock to correct physical inventory differences.
+    @Transactional
+    public Product adjustStock(
+            StockAdjustmentRequest request,
+            String authenticatedEmail
+    ) {
+        User performedBy = getAuthenticatedAdmin(authenticatedEmail);
+
+        int adjustmentQuantity = request.adjustmentQuantity();
+
+        if (adjustmentQuantity == 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Adjustment quantity cannot be zero"
+            );
+        }
+
+        Product product = getProductForUpdate(request.productId());
+
+        int previousQuantity = product.getAvailableQuantity();
+
+        long calculatedQuantity =
+                (long) previousQuantity + adjustmentQuantity;
+
+        if (calculatedQuantity < 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Stock adjustment cannot reduce inventory below zero"
+            );
+        }
+
+        if (calculatedQuantity > Integer.MAX_VALUE) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Inventory quantity exceeds the supported limit"
+            );
+        }
+
+        int newQuantity = (int) calculatedQuantity;
+        int absoluteQuantity = (int) Math.abs((long) adjustmentQuantity);
+
+        product.setAvailableQuantity(newQuantity);
+        productRepository.save(product);
+
+        recordTransaction(
+                product,
+                null,
+                performedBy,
+                InventoryTransactionType.ADJUSTMENT,
+                absoluteQuantity,
+                previousQuantity,
+                newQuantity,
+                request.reason().trim()
+        );
+
+        return product;
+    }
+
     @Transactional
     public void reserveForOrder(
             Long productId,
