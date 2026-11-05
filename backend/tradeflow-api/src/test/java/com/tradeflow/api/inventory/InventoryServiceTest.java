@@ -1,5 +1,16 @@
 package com.tradeflow.api.inventory;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
+
+import org.springframework.data.domain.PageRequest;
+
+import java.time.LocalDateTime;
+import java.util.List;
+
 import com.tradeflow.api.product.Product;
 import com.tradeflow.api.product.ProductRepository;
 import com.tradeflow.api.user.User;
@@ -16,6 +27,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
+
+
 
 import java.util.Optional;
 
@@ -63,6 +76,351 @@ class InventoryServiceTest {
 
         when(userRepository.findByEmail(ADMIN_EMAIL))
                 .thenReturn(Optional.of(admin));
+    }
+
+    private InventoryTransaction createMockTransaction() {
+
+        InventoryTransaction transaction = mock(InventoryTransaction.class);
+
+        when(product.getId()).thenReturn(PRODUCT_ID);
+        when(product.getName()).thenReturn("Industrial Safety Gloves");
+        when(product.getSku()).thenReturn("TF-GLOVE-001");
+
+        when(admin.getId()).thenReturn(3L);
+        when(admin.getEmail()).thenReturn(ADMIN_EMAIL);
+
+        when(transaction.getId()).thenReturn(1L);
+        when(transaction.getProduct()).thenReturn(product);
+        when(transaction.getPurchaseOrder()).thenReturn(null);
+        when(transaction.getPerformedBy()).thenReturn(admin);
+        when(transaction.getTransactionType())
+                .thenReturn(InventoryTransactionType.STOCK_IN);
+        when(transaction.getQuantity()).thenReturn(100);
+        when(transaction.getPreviousQuantity()).thenReturn(1950);
+        when(transaction.getNewQuantity()).thenReturn(2050);
+        when(transaction.getReason()).thenReturn("New stock received");
+        when(transaction.getCreatedAt())
+                .thenReturn(LocalDateTime.of(2026, 11, 5, 10, 30));
+
+        return transaction;
+    }
+
+    // --------------------------------------------------
+// Inventory transaction history tests
+// --------------------------------------------------
+
+    @Test
+    void getTransactionHistory_shouldReturnPaginatedTransactionHistory() {
+
+        authenticateAdmin();
+
+        InventoryTransaction transaction = createMockTransaction();
+
+        Page<InventoryTransaction> transactionPage = new PageImpl<>(
+                List.of(transaction),
+                PageRequest.of(1, 5, Sort.by(Sort.Direction.DESC, "createdAt")),
+                11
+        );
+
+        when(transactionRepository.findAll(
+                any(Specification.class),
+                any(Pageable.class)
+        )).thenReturn(transactionPage);
+
+        Page<InventoryTransactionResponse> response =
+                inventoryService.getTransactionHistory(
+                        1,
+                        5,
+                        "createdAt",
+                        "desc",
+                        null,
+                        null,
+                        null,
+                        null,
+                        ADMIN_EMAIL
+                );
+
+        // Verify pagination metadata.
+        assertNotNull(response);
+        assertEquals(1, response.getNumber());
+        assertEquals(5, response.getSize());
+        assertEquals(11, response.getTotalElements());
+        assertEquals(3, response.getTotalPages());
+
+        // Verify response DTO mapping.
+        InventoryTransactionResponse result = response.getContent().get(0);
+
+        assertEquals(1L, result.id());
+        assertEquals(PRODUCT_ID, result.productId());
+        assertEquals("Industrial Safety Gloves", result.productName());
+        assertEquals("TF-GLOVE-001", result.productSku());
+        assertNull(result.purchaseOrderId());
+        assertEquals(3L, result.performedById());
+        assertEquals(ADMIN_EMAIL, result.performedByEmail());
+        assertEquals("STOCK_IN", result.transactionType());
+        assertEquals(100, result.quantity());
+        assertEquals(1950, result.previousQuantity());
+        assertEquals(2050, result.newQuantity());
+        assertEquals("New stock received", result.reason());
+
+        assertEquals(
+                LocalDateTime.of(2026, 11, 5, 10, 30),
+                result.createdAt()
+        );
+
+        // Verify the repository received the correct pagination and sorting.
+        ArgumentCaptor<Pageable> pageableCaptor =
+                ArgumentCaptor.forClass(Pageable.class);
+
+        verify(transactionRepository).findAll(
+                any(Specification.class),
+                pageableCaptor.capture()
+        );
+
+        Pageable pageable = pageableCaptor.getValue();
+
+        assertEquals(1, pageable.getPageNumber());
+        assertEquals(5, pageable.getPageSize());
+        assertEquals(
+                Sort.Direction.DESC,
+                pageable.getSort().getOrderFor("createdAt").getDirection()
+        );
+    }
+
+    @Test
+    void getTransactionHistory_shouldApplyCombinedFilters() {
+
+        authenticateAdmin();
+
+        LocalDateTime startDate = LocalDateTime.of(2026, 11, 1, 0, 0);
+        LocalDateTime endDate = LocalDateTime.of(2026, 11, 5, 23, 59);
+
+        when(transactionRepository.findAll(
+                any(Specification.class),
+                any(Pageable.class)
+        )).thenReturn(Page.empty());
+
+        Page<InventoryTransactionResponse> response =
+                inventoryService.getTransactionHistory(
+                        0,
+                        20,
+                        "quantity",
+                        "asc",
+                        PRODUCT_ID,
+                        InventoryTransactionType.STOCK_OUT,
+                        startDate,
+                        endDate,
+                        ADMIN_EMAIL
+                );
+
+        assertNotNull(response);
+        assertTrue(response.isEmpty());
+
+        ArgumentCaptor<Specification<InventoryTransaction>> specificationCaptor =
+                ArgumentCaptor.forClass(Specification.class);
+
+        ArgumentCaptor<Pageable> pageableCaptor =
+                ArgumentCaptor.forClass(Pageable.class);
+
+        verify(transactionRepository).findAll(
+                specificationCaptor.capture(),
+                pageableCaptor.capture()
+        );
+
+        assertNotNull(specificationCaptor.getValue());
+
+        Pageable pageable = pageableCaptor.getValue();
+
+        assertEquals(0, pageable.getPageNumber());
+        assertEquals(20, pageable.getPageSize());
+        assertEquals(
+                Sort.Direction.ASC,
+                pageable.getSort().getOrderFor("quantity").getDirection()
+        );
+    }
+
+    @Test
+    void getTransactionHistory_shouldRejectNegativePage() {
+
+        authenticateAdmin();
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.getTransactionHistory(
+                        -1, 10, "createdAt", "desc",
+                        null, null, null, null, ADMIN_EMAIL
+                )
+        );
+
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getStatusCode());
+        verifyNoInteractions(transactionRepository);
+    }
+
+    @Test
+    void getTransactionHistory_shouldRejectInvalidPageSize() {
+
+        authenticateAdmin();
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.getTransactionHistory(
+                        0, 0, "createdAt", "desc",
+                        null, null, null, null, ADMIN_EMAIL
+                )
+        );
+
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getStatusCode());
+        verifyNoInteractions(transactionRepository);
+    }
+
+    @Test
+    void getTransactionHistory_shouldRejectPageSizeAboveMaximum() {
+
+        authenticateAdmin();
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.getTransactionHistory(
+                        0, 101, "createdAt", "desc",
+                        null, null, null, null, ADMIN_EMAIL
+                )
+        );
+
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getStatusCode());
+        verifyNoInteractions(transactionRepository);
+    }
+
+    @Test
+    void getTransactionHistory_shouldRejectInvalidSortField() {
+
+        authenticateAdmin();
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.getTransactionHistory(
+                        0, 10, "password", "desc",
+                        null, null, null, null, ADMIN_EMAIL
+                )
+        );
+
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getStatusCode());
+        verifyNoInteractions(transactionRepository);
+    }
+
+    @Test
+    void getTransactionHistory_shouldRejectInvalidSortDirection() {
+
+        authenticateAdmin();
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.getTransactionHistory(
+                        0, 10, "createdAt", "random",
+                        null, null, null, null, ADMIN_EMAIL
+                )
+        );
+
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getStatusCode());
+        verifyNoInteractions(transactionRepository);
+    }
+
+    @Test
+    void getTransactionHistory_shouldRejectInvalidProductId() {
+
+        authenticateAdmin();
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.getTransactionHistory(
+                        0, 10, "createdAt", "desc",
+                        0L, null, null, null, ADMIN_EMAIL
+                )
+        );
+
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getStatusCode());
+        verifyNoInteractions(transactionRepository);
+    }
+
+    @Test
+    void getTransactionHistory_shouldRejectInvalidDateRange() {
+
+        authenticateAdmin();
+
+        LocalDateTime startDate = LocalDateTime.of(2026, 11, 6, 0, 0);
+        LocalDateTime endDate = LocalDateTime.of(2026, 11, 5, 0, 0);
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.getTransactionHistory(
+                        0, 10, "createdAt", "desc",
+                        null, null, startDate, endDate, ADMIN_EMAIL
+                )
+        );
+
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getStatusCode());
+        verifyNoInteractions(transactionRepository);
+    }
+
+    @Test
+    void getTransactionHistory_shouldRejectBuyer() {
+
+        when(buyer.isEnabled()).thenReturn(true);
+        when(buyer.getRole()).thenReturn(UserRole.BUYER);
+
+        when(userRepository.findByEmail(ADMIN_EMAIL))
+                .thenReturn(Optional.of(buyer));
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.getTransactionHistory(
+                        0, 10, "createdAt", "desc",
+                        null, null, null, null, ADMIN_EMAIL
+                )
+        );
+
+        assertEquals(HttpStatus.FORBIDDEN, exception.getStatusCode());
+        verifyNoInteractions(transactionRepository);
+    }
+
+    @Test
+    void getTransactionHistory_shouldRejectSupplier() {
+
+        when(supplier.isEnabled()).thenReturn(true);
+        when(supplier.getRole()).thenReturn(UserRole.SUPPLIER);
+
+        when(userRepository.findByEmail(ADMIN_EMAIL))
+                .thenReturn(Optional.of(supplier));
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.getTransactionHistory(
+                        0, 10, "createdAt", "desc",
+                        null, null, null, null, ADMIN_EMAIL
+                )
+        );
+
+        assertEquals(HttpStatus.FORBIDDEN, exception.getStatusCode());
+        verifyNoInteractions(transactionRepository);
+    }
+
+    @Test
+    void getTransactionHistory_shouldRejectDisabledAdmin() {
+
+        when(admin.isEnabled()).thenReturn(false);
+
+        when(userRepository.findByEmail(ADMIN_EMAIL))
+                .thenReturn(Optional.of(admin));
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.getTransactionHistory(
+                        0, 10, "createdAt", "desc",
+                        null, null, null, null, ADMIN_EMAIL
+                )
+        );
+
+        assertEquals(HttpStatus.FORBIDDEN, exception.getStatusCode());
+        verifyNoInteractions(transactionRepository);
     }
 
     // --------------------------------------------------

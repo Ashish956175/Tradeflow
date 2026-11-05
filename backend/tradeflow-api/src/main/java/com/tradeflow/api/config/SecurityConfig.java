@@ -186,7 +186,13 @@ public class SecurityConfig {
                                 HttpMethod.POST,
                                 "/api/v1/products"
                         ).hasAnyRole("SUPPLIER", "ADMIN")
-                        // Manual inventory stock-in: admin only
+
+                        // Inventory transaction history: admin only
+                        .requestMatchers(
+                                HttpMethod.GET,
+                                "/api/v1/inventory/transactions"
+                        ).hasRole("ADMIN")
+
                         // Manual inventory operations: admin only
                         .requestMatchers(
                                 HttpMethod.POST,

@@ -11,6 +11,15 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
+
+import java.time.LocalDateTime;
+import java.util.Set;
+
 import java.util.Locale;
 
 @Service
@@ -20,6 +29,17 @@ public class InventoryService {
     private final InventoryTransactionRepository transactionRepository;
     private final UserRepository userRepository;
 
+    private static final int MAX_PAGE_SIZE = 100;
+
+    private static final Set<String> ALLOWED_SORT_FIELDS = Set.of(
+            "id",
+            "createdAt",
+            "quantity",
+            "transactionType",
+            "previousQuantity",
+            "newQuantity"
+    );
+
     public InventoryService(
             ProductRepository productRepository,
             InventoryTransactionRepository transactionRepository,
@@ -28,6 +48,94 @@ public class InventoryService {
         this.productRepository = productRepository;
         this.transactionRepository = transactionRepository;
         this.userRepository = userRepository;
+    }
+
+    // Retrieves paginated inventory transaction history for administrators.
+    @Transactional(readOnly = true)
+    public Page<InventoryTransactionResponse> getTransactionHistory(
+            int page,
+            int size,
+            String sortBy,
+            String direction,
+            Long productId,
+            InventoryTransactionType transactionType,
+            LocalDateTime startDate,
+            LocalDateTime endDate,
+            String authenticatedEmail
+    ) {
+        // Verify administrator access.
+        getAuthenticatedAdmin(authenticatedEmail);
+
+        // Validate pagination.
+        if (page < 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Page index cannot be negative"
+            );
+        }
+
+        if (size < 1 || size > MAX_PAGE_SIZE) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Page size must be between 1 and " + MAX_PAGE_SIZE
+            );
+        }
+
+        // Validate sorting field.
+        if (sortBy == null || !ALLOWED_SORT_FIELDS.contains(sortBy)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Invalid sort field. Allowed fields: " + ALLOWED_SORT_FIELDS
+            );
+        }
+
+        // Validate sorting direction.
+        Sort.Direction sortDirection;
+
+        try {
+            sortDirection = Sort.Direction.fromString(direction);
+        } catch (IllegalArgumentException | NullPointerException exception) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Sort direction must be 'asc' or 'desc'"
+            );
+        }
+
+        // Validate product ID.
+        if (productId != null && productId <= 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Product ID must be greater than zero"
+            );
+        }
+
+        // Validate date range.
+        if (startDate != null && endDate != null
+                && startDate.isAfter(endDate)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Start date cannot be after end date"
+            );
+        }
+
+        // Build pagination and sorting.
+        Pageable pageable = PageRequest.of(
+                page,
+                size,
+                Sort.by(sortDirection, sortBy)
+        );
+
+        // Combine optional filters.
+        Specification<InventoryTransaction> specification =
+                Specification.<InventoryTransaction>unrestricted()
+                        .and(InventoryTransactionSpecification.hasProductId(productId))
+                        .and(InventoryTransactionSpecification.hasTransactionType(transactionType))
+                        .and(InventoryTransactionSpecification.hasStartDate(startDate))
+                        .and(InventoryTransactionSpecification.hasEndDate(endDate));
+
+        // Retrieve transactions and map them to response DTOs.
+        return transactionRepository.findAll(specification, pageable)
+                .map(InventoryTransactionResponse::from);
     }
 
     // Admin manually adds stock to a product.
