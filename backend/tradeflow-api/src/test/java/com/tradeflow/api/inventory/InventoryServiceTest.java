@@ -296,6 +296,261 @@ class InventoryServiceTest {
     }
 
     // --------------------------------------------------
+    // Stock-out tests
+    // --------------------------------------------------
+
+    @Test
+    void stockOut_shouldDecreaseQuantityAndRecordTransaction() {
+
+        authenticateAdmin();
+
+        when(product.getAvailableQuantity()).thenReturn(100);
+
+        when(productRepository.findByIdForUpdate(PRODUCT_ID))
+                .thenReturn(Optional.of(product));
+
+        when(productRepository.save(product)).thenReturn(product);
+
+        StockOutRequest request = new StockOutRequest(
+                PRODUCT_ID,
+                25,
+                "Damaged products removed from warehouse"
+        );
+
+        Product response = inventoryService.stockOut(
+                request,
+                ADMIN_EMAIL
+        );
+
+        assertNotNull(response);
+
+        verify(product).setAvailableQuantity(75);
+        verify(productRepository).save(product);
+
+        ArgumentCaptor<InventoryTransaction> captor =
+                ArgumentCaptor.forClass(InventoryTransaction.class);
+
+        verify(transactionRepository).save(captor.capture());
+
+        InventoryTransaction transaction = captor.getValue();
+
+        assertEquals(product, transaction.getProduct());
+        assertNull(transaction.getPurchaseOrder());
+        assertEquals(admin, transaction.getPerformedBy());
+
+        assertEquals(
+                InventoryTransactionType.STOCK_OUT,
+                transaction.getTransactionType()
+        );
+
+        assertEquals(25, transaction.getQuantity());
+        assertEquals(100, transaction.getPreviousQuantity());
+        assertEquals(75, transaction.getNewQuantity());
+
+        assertEquals(
+                "Damaged products removed from warehouse",
+                transaction.getReason()
+        );
+    }
+
+    @Test
+    void stockOut_shouldAllowRemovingEntireAvailableQuantity() {
+
+        authenticateAdmin();
+
+        when(product.getAvailableQuantity()).thenReturn(25);
+
+        when(productRepository.findByIdForUpdate(PRODUCT_ID))
+                .thenReturn(Optional.of(product));
+
+        StockOutRequest request = new StockOutRequest(
+                PRODUCT_ID,
+                25,
+                "Entire stock removed"
+        );
+
+        inventoryService.stockOut(request, ADMIN_EMAIL);
+
+        verify(product).setAvailableQuantity(0);
+        verify(productRepository).save(product);
+        verify(transactionRepository).save(any(InventoryTransaction.class));
+    }
+
+    @Test
+    void stockOut_shouldRejectInsufficientInventory() {
+
+        authenticateAdmin();
+
+        when(product.getAvailableQuantity()).thenReturn(20);
+
+        when(productRepository.findByIdForUpdate(PRODUCT_ID))
+                .thenReturn(Optional.of(product));
+
+        StockOutRequest request = new StockOutRequest(
+                PRODUCT_ID,
+                30,
+                "Warehouse stock removal"
+        );
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.stockOut(request, ADMIN_EMAIL)
+        );
+
+        assertEquals(HttpStatus.CONFLICT, exception.getStatusCode());
+
+        verify(product, never()).setAvailableQuantity(anyInt());
+        verify(productRepository, never()).save(any(Product.class));
+        verifyNoInteractions(transactionRepository);
+    }
+
+    @Test
+    void stockOut_shouldRejectZeroQuantity() {
+
+        authenticateAdmin();
+
+        StockOutRequest request = new StockOutRequest(
+                PRODUCT_ID,
+                0,
+                "Stock removal"
+        );
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.stockOut(request, ADMIN_EMAIL)
+        );
+
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getStatusCode());
+
+        verifyNoInteractions(productRepository);
+        verifyNoInteractions(transactionRepository);
+    }
+
+    @Test
+    void stockOut_shouldRejectNegativeQuantity() {
+
+        authenticateAdmin();
+
+        StockOutRequest request = new StockOutRequest(
+                PRODUCT_ID,
+                -10,
+                "Stock removal"
+        );
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.stockOut(request, ADMIN_EMAIL)
+        );
+
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getStatusCode());
+
+        verifyNoInteractions(productRepository);
+        verifyNoInteractions(transactionRepository);
+    }
+
+    @Test
+    void stockOut_shouldRejectNonexistentProduct() {
+
+        authenticateAdmin();
+
+        when(productRepository.findByIdForUpdate(PRODUCT_ID))
+                .thenReturn(Optional.empty());
+
+        StockOutRequest request = new StockOutRequest(
+                PRODUCT_ID,
+                10,
+                "Stock removal"
+        );
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.stockOut(request, ADMIN_EMAIL)
+        );
+
+        assertEquals(HttpStatus.NOT_FOUND, exception.getStatusCode());
+
+        verify(productRepository, never()).save(any(Product.class));
+        verifyNoInteractions(transactionRepository);
+    }
+
+    @Test
+    void stockOut_shouldRejectBuyer() {
+
+        when(buyer.isEnabled()).thenReturn(true);
+        when(buyer.getRole()).thenReturn(UserRole.BUYER);
+
+        when(userRepository.findByEmail(ADMIN_EMAIL))
+                .thenReturn(Optional.of(buyer));
+
+        StockOutRequest request = new StockOutRequest(
+                PRODUCT_ID,
+                10,
+                "Stock removal"
+        );
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.stockOut(request, ADMIN_EMAIL)
+        );
+
+        assertEquals(HttpStatus.FORBIDDEN, exception.getStatusCode());
+
+        verifyNoInteractions(productRepository);
+        verifyNoInteractions(transactionRepository);
+    }
+
+    @Test
+    void stockOut_shouldRejectSupplier() {
+
+        when(supplier.isEnabled()).thenReturn(true);
+        when(supplier.getRole()).thenReturn(UserRole.SUPPLIER);
+
+        when(userRepository.findByEmail(ADMIN_EMAIL))
+                .thenReturn(Optional.of(supplier));
+
+        StockOutRequest request = new StockOutRequest(
+                PRODUCT_ID,
+                10,
+                "Stock removal"
+        );
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.stockOut(request, ADMIN_EMAIL)
+        );
+
+        assertEquals(HttpStatus.FORBIDDEN, exception.getStatusCode());
+
+        verifyNoInteractions(productRepository);
+        verifyNoInteractions(transactionRepository);
+    }
+
+    @Test
+    void stockOut_shouldRejectDisabledAdmin() {
+
+        when(admin.isEnabled()).thenReturn(false);
+
+        when(userRepository.findByEmail(ADMIN_EMAIL))
+                .thenReturn(Optional.of(admin));
+
+        StockOutRequest request = new StockOutRequest(
+                PRODUCT_ID,
+                10,
+                "Stock removal"
+        );
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.stockOut(request, ADMIN_EMAIL)
+        );
+
+        assertEquals(HttpStatus.FORBIDDEN, exception.getStatusCode());
+
+        verifyNoInteractions(productRepository);
+        verifyNoInteractions(transactionRepository);
+    }
+
+    // --------------------------------------------------
     // Stock adjustment tests
     // --------------------------------------------------
 
@@ -547,4 +802,6 @@ class InventoryServiceTest {
         verify(productRepository, never()).save(any(Product.class));
         verifyNoInteractions(transactionRepository);
     }
+
+
 }

@@ -70,6 +70,46 @@ public class InventoryService {
         return product;
     }
 
+    // Admin manually removes stock from available inventory.
+    @Transactional
+    public Product stockOut(
+            StockOutRequest request,
+            String authenticatedEmail
+    ) {
+        User performedBy = getAuthenticatedAdmin(authenticatedEmail);
+
+        validateQuantity(request.quantity());
+
+        Product product = getProductForUpdate(request.productId());
+
+        int previousQuantity = product.getAvailableQuantity();
+
+        if (previousQuantity < request.quantity()) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Insufficient inventory for stock-out"
+            );
+        }
+
+        int newQuantity = previousQuantity - request.quantity();
+
+        product.setAvailableQuantity(newQuantity);
+        productRepository.save(product);
+
+        recordTransaction(
+                product,
+                null,
+                performedBy,
+                InventoryTransactionType.STOCK_OUT,
+                request.quantity(),
+                previousQuantity,
+                newQuantity,
+                request.reason().trim()
+        );
+
+        return product;
+    }
+
     // Admin manually adjusts stock to correct physical inventory differences.
     @Transactional
     public Product adjustStock(

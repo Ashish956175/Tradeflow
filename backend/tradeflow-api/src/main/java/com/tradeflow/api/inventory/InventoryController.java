@@ -27,6 +27,19 @@ public class InventoryController {
                 authentication.getName()
         );
     }
+
+    @PostMapping("/stock-out")
+    @ResponseStatus(HttpStatus.OK)
+    public Product stockOut(
+            @Valid @RequestBody StockOutRequest request,
+            Authentication authentication
+    ) {
+        return inventoryService.stockOut(
+                request,
+                authentication.getName()
+        );
+    }
+
     @PostMapping("/adjust")
     @ResponseStatus(HttpStatus.OK)
     public Product adjustStock(
