@@ -4,7 +4,12 @@ import jakarta.persistence.EntityManager;
 
 import org.junit.jupiter.api.Test;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 
+import java.util.List;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -66,6 +71,21 @@ class ProductRepositoryIntegrationTest {
         product.setSku("TEST-" + System.nanoTime());
         product.setUnitPrice(new BigDecimal("100.00"));
         product.setAvailableQuantity(quantity);
+        product.setUnit("PIECE");
+
+        return productRepository.saveAndFlush(product);
+    }
+
+    private Product createProduct(int quantity, int threshold) {
+
+        Product product = new Product();
+
+        product.setName("Threshold Test Product");
+        product.setDescription("Low-stock specification integration test");
+        product.setSku("THRESHOLD-" + System.nanoTime());
+        product.setUnitPrice(new BigDecimal("100.00"));
+        product.setAvailableQuantity(quantity);
+        product.setLowStockThreshold(threshold);
         product.setUnit("PIECE");
 
         return productRepository.saveAndFlush(product);
@@ -186,4 +206,76 @@ class ProductRepositoryIntegrationTest {
             executor.shutdownNow();
         }
     }
+
+    @Test
+    @Transactional
+    void lowStockSpecification_shouldReturnCorrectProductsAndStatuses() {
+
+        // Create products covering all stock conditions.
+        Product belowThreshold = createProduct(5, 10);
+        Product atThreshold = createProduct(10, 10);
+        Product outOfStock = createProduct(0, 10);
+        Product aboveThreshold = createProduct(11, 10);
+
+        Specification<Product> lowStockSpecification =
+                ProductSpecification.isLowStock();
+
+        // Verify all low-stock and out-of-stock products.
+        Page<Product> lowStockPage = productRepository.findAll(
+                lowStockSpecification,
+                PageRequest.of(
+                        0,
+                        10,
+                        Sort.by(Sort.Direction.ASC, "availableQuantity")
+                )
+        );
+
+        List<Long> lowStockIds = lowStockPage.getContent()
+                .stream()
+                .map(Product::getId)
+                .toList();
+
+        assertTrue(lowStockIds.contains(belowThreshold.getId()));
+        assertTrue(lowStockIds.contains(atThreshold.getId()));
+        assertTrue(lowStockIds.contains(outOfStock.getId()));
+
+        assertTrue(!lowStockIds.contains(aboveThreshold.getId()));
+
+        // Verify LOW_STOCK excludes out-of-stock products.
+        Specification<Product> onlyLowStock =
+                lowStockSpecification.and(
+                        ProductSpecification.hasStockStatus("LOW_STOCK")
+                );
+
+        List<Product> lowStockProducts =
+                productRepository.findAll(onlyLowStock);
+
+        List<Long> onlyLowStockIds = lowStockProducts.stream()
+                .map(Product::getId)
+                .toList();
+
+        assertTrue(onlyLowStockIds.contains(belowThreshold.getId()));
+        assertTrue(onlyLowStockIds.contains(atThreshold.getId()));
+        assertTrue(!onlyLowStockIds.contains(outOfStock.getId()));
+        assertTrue(!onlyLowStockIds.contains(aboveThreshold.getId()));
+
+        // Verify OUT_OF_STOCK returns only zero-quantity products.
+        Specification<Product> onlyOutOfStock =
+                lowStockSpecification.and(
+                        ProductSpecification.hasStockStatus("OUT_OF_STOCK")
+                );
+
+        List<Product> outOfStockProducts =
+                productRepository.findAll(onlyOutOfStock);
+
+        List<Long> outOfStockIds = outOfStockProducts.stream()
+                .map(Product::getId)
+                .toList();
+
+        assertTrue(outOfStockIds.contains(outOfStock.getId()));
+        assertTrue(!outOfStockIds.contains(belowThreshold.getId()));
+        assertTrue(!outOfStockIds.contains(atThreshold.getId()));
+        assertTrue(!outOfStockIds.contains(aboveThreshold.getId()));
+    }
+
 }

@@ -61,6 +61,7 @@ class ProductServiceTest {
         assertEquals(new BigDecimal("799.00"), result.getUnitPrice());
         assertEquals(50, result.getAvailableQuantity());
         assertEquals("piece", result.getUnit());
+        assertEquals(10, result.getLowStockThreshold());
 
         verify(productRepository).existsBySku("TF-MOUSE-001");
         verify(productRepository).save(any(Product.class));
@@ -255,6 +256,58 @@ class ProductServiceTest {
         assertEquals("Minimum quantity cannot be negative", exception.getReason());
 
         verifyNoInteractions(productRepository);
+    }
+
+    @Test
+    void createProduct_shouldSaveCustomLowStockThreshold() {
+
+        ProductRequest request = new ProductRequest(
+                "Wireless Mouse",
+                "Wireless mouse with USB receiver",
+                "TF-MOUSE-002",
+                new BigDecimal("799.00"),
+                50,
+                "piece",
+                20
+        );
+
+        when(productRepository.existsBySku("TF-MOUSE-002"))
+                .thenReturn(false);
+
+        when(productRepository.save(any(Product.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        Product result = productService.createProduct(request);
+
+        assertEquals(20, result.getLowStockThreshold());
+
+        verify(productRepository).save(any(Product.class));
+    }
+
+    @Test
+    void createProduct_shouldUseDefaultThresholdWhenThresholdIsNull() {
+
+        ProductRequest request = new ProductRequest(
+                "Wireless Mouse",
+                "Wireless mouse with USB receiver",
+                "TF-MOUSE-003",
+                new BigDecimal("799.00"),
+                50,
+                "piece",
+                null
+        );
+
+        when(productRepository.existsBySku("TF-MOUSE-003"))
+                .thenReturn(false);
+
+        when(productRepository.save(any(Product.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        Product result = productService.createProduct(request);
+
+        assertEquals(10, result.getLowStockThreshold());
+
+        verify(productRepository).save(any(Product.class));
     }
 
 }

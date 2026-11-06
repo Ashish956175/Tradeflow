@@ -63,4 +63,45 @@ public final class ProductSpecification {
             );
         };
     }
+
+    public static Specification<Product> isLowStock() {
+        return (root, query, criteriaBuilder) ->
+                criteriaBuilder.lessThanOrEqualTo(
+                        root.<Integer>get("availableQuantity"),
+                        root.<Integer>get("lowStockThreshold")
+                );
+    }
+
+    public static Specification<Product> hasStockStatus(String status) {
+        return (root, query, criteriaBuilder) -> {
+
+            if (status == null || status.isBlank()) {
+                return criteriaBuilder.conjunction();
+            }
+
+            return switch (status.trim().toUpperCase()) {
+
+                case "OUT_OF_STOCK" ->
+                        criteriaBuilder.equal(
+                                root.get("availableQuantity"), 0
+                        );
+
+                case "LOW_STOCK" ->
+                        criteriaBuilder.and(
+                                criteriaBuilder.greaterThan(
+                                        root.<Integer>get("availableQuantity"), 0
+                                ),
+                                criteriaBuilder.lessThanOrEqualTo(
+                                        root.<Integer>get("availableQuantity"),
+                                        root.<Integer>get("lowStockThreshold")
+                                )
+                        );
+
+                default -> throw new IllegalArgumentException(
+                        "Invalid stock status"
+                );
+            };
+        };
+    }
+
 }

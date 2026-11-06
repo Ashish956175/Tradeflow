@@ -84,4 +84,23 @@ public class InventoryController {
                 authentication.getName()
         );
     }
+
+    @GetMapping("/low-stock")
+    public Page<LowStockProductResponse> getLowStockProducts(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(defaultValue = "availableQuantity") String sortBy,
+            @RequestParam(defaultValue = "asc") String direction,
+            @RequestParam(required = false) String status,
+            Authentication authentication
+    ) {
+        return inventoryService.getLowStockProducts(
+                page,
+                size,
+                sortBy,
+                direction,
+                status,
+                authentication.getName()
+        );
+    }
 }

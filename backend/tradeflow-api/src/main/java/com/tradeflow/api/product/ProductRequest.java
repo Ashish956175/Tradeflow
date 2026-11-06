@@ -10,31 +10,54 @@ import java.math.BigDecimal;
 
 public record ProductRequest(
 
-    @NotBlank(message = "Product name is required")
-    @Size(max = 150)
-    String name,
+        @NotBlank(message = "Product name is required")
+        @Size(max = 150)
+        String name,
 
-    @Size(max = 1000)
-    String description,
+        @Size(max = 1000)
+        String description,
 
-    @NotBlank(message = "SKU is required")
-    @Size(max = 50)
-    String sku,
+        @NotBlank(message = "SKU is required")
+        @Size(max = 50)
+        String sku,
 
-    @NotNull(message = "Unit price is required")
-    @DecimalMin(
-        value = "0.01",
-        message = "Unit price must be greater than zero"
-    )
-    BigDecimal unitPrice,
+        @NotNull(message = "Unit price is required")
+        @DecimalMin(
+                value = "0.01",
+                message = "Unit price must be greater than zero"
+        )
+        BigDecimal unitPrice,
 
-    @NotNull(message = "Available quantity is required")
-    @Min(value = 0, message = "Quantity cannot be negative")
-    Integer availableQuantity,
+        @NotNull(message = "Available quantity is required")
+        @Min(value = 0, message = "Quantity cannot be negative")
+        Integer availableQuantity,
 
-    @NotBlank(message = "Unit is required")
-    @Size(max = 30)
-    String unit
+        @NotBlank(message = "Unit is required")
+        @Size(max = 30)
+        String unit,
+
+        @Min(value = 1, message = "Low-stock threshold must be at least 1")
+        Integer lowStockThreshold
 
 ) {
+
+    // Preserve compatibility with existing six-argument constructors.
+    public ProductRequest(
+            String name,
+            String description,
+            String sku,
+            BigDecimal unitPrice,
+            Integer availableQuantity,
+            String unit
+    ) {
+        this(
+                name,
+                description,
+                sku,
+                unitPrice,
+                availableQuantity,
+                unit,
+                10
+        );
+    }
 }

@@ -424,6 +424,371 @@ class InventoryServiceTest {
     }
 
     // --------------------------------------------------
+    // Low-stock alert tests
+    // --------------------------------------------------
+
+    private Product createLowStockProduct(
+            Long id,
+            String name,
+            String sku,
+            int availableQuantity,
+            int threshold,
+            String unit
+    ) {
+        Product lowStockProduct = mock(Product.class);
+
+        when(lowStockProduct.getId()).thenReturn(id);
+        when(lowStockProduct.getName()).thenReturn(name);
+        when(lowStockProduct.getSku()).thenReturn(sku);
+        when(lowStockProduct.getAvailableQuantity())
+                .thenReturn(availableQuantity);
+        when(lowStockProduct.getLowStockThreshold()).thenReturn(threshold);
+        when(lowStockProduct.getUnit()).thenReturn(unit);
+
+        return lowStockProduct;
+    }
+
+    @Test
+    void getLowStockProducts_shouldReturnPaginatedAlerts() {
+
+        authenticateAdmin();
+
+        Product lowStockProduct = createLowStockProduct(
+                1L,
+                "Safety Gloves",
+                "TF-GLOVE-001",
+                5,
+                10,
+                "pcs"
+        );
+
+        Product outOfStockProduct = createLowStockProduct(
+                2L,
+                "Industrial Helmet",
+                "TF-HELMET-001",
+                0,
+                10,
+                "pcs"
+        );
+
+        Page<Product> productPage = new PageImpl<>(
+                List.of(lowStockProduct, outOfStockProduct),
+                PageRequest.of(
+                        0,
+                        10,
+                        Sort.by(Sort.Direction.ASC, "availableQuantity")
+                ),
+                2
+        );
+
+        when(productRepository.findAll(
+                any(Specification.class),
+                any(Pageable.class)
+        )).thenReturn(productPage);
+
+        Page<LowStockProductResponse> response =
+                inventoryService.getLowStockProducts(
+                        0,
+                        10,
+                        "availableQuantity",
+                        "asc",
+                        null,
+                        ADMIN_EMAIL
+                );
+
+        assertNotNull(response);
+        assertEquals(2, response.getTotalElements());
+        assertEquals(1, response.getTotalPages());
+
+        LowStockProductResponse lowStockResult =
+                response.getContent().get(0);
+
+        assertEquals(1L, lowStockResult.productId());
+        assertEquals("Safety Gloves", lowStockResult.productName());
+        assertEquals("TF-GLOVE-001", lowStockResult.sku());
+        assertEquals(5, lowStockResult.availableQuantity());
+        assertEquals(10, lowStockResult.lowStockThreshold());
+        assertEquals("pcs", lowStockResult.unit());
+        assertEquals("LOW_STOCK", lowStockResult.status());
+
+        LowStockProductResponse outOfStockResult =
+                response.getContent().get(1);
+
+        assertEquals(2L, outOfStockResult.productId());
+        assertEquals("Industrial Helmet", outOfStockResult.productName());
+        assertEquals(0, outOfStockResult.availableQuantity());
+        assertEquals("OUT_OF_STOCK", outOfStockResult.status());
+
+        ArgumentCaptor<Pageable> pageableCaptor =
+                ArgumentCaptor.forClass(Pageable.class);
+
+        verify(productRepository).findAll(
+                any(Specification.class),
+                pageableCaptor.capture()
+        );
+
+        Pageable pageable = pageableCaptor.getValue();
+
+        assertEquals(0, pageable.getPageNumber());
+        assertEquals(10, pageable.getPageSize());
+        assertEquals(
+                Sort.Direction.ASC,
+                pageable.getSort()
+                        .getOrderFor("availableQuantity")
+                        .getDirection()
+        );
+    }
+
+    @Test
+    void getLowStockProducts_shouldApplyLowStockStatusFilter() {
+
+        authenticateAdmin();
+
+        when(productRepository.findAll(
+                any(Specification.class),
+                any(Pageable.class)
+        )).thenReturn(Page.empty());
+
+        Page<LowStockProductResponse> response =
+                inventoryService.getLowStockProducts(
+                        0,
+                        10,
+                        "availableQuantity",
+                        "asc",
+                        "LOW_STOCK",
+                        ADMIN_EMAIL
+                );
+
+        assertNotNull(response);
+        assertTrue(response.isEmpty());
+
+        verify(productRepository).findAll(
+                any(Specification.class),
+                any(Pageable.class)
+        );
+    }
+
+    @Test
+    void getLowStockProducts_shouldApplyOutOfStockStatusFilter() {
+
+        authenticateAdmin();
+
+        when(productRepository.findAll(
+                any(Specification.class),
+                any(Pageable.class)
+        )).thenReturn(Page.empty());
+
+        Page<LowStockProductResponse> response =
+                inventoryService.getLowStockProducts(
+                        0,
+                        10,
+                        "availableQuantity",
+                        "asc",
+                        "OUT_OF_STOCK",
+                        ADMIN_EMAIL
+                );
+
+        assertNotNull(response);
+        assertTrue(response.isEmpty());
+
+        verify(productRepository).findAll(
+                any(Specification.class),
+                any(Pageable.class)
+        );
+    }
+
+    @Test
+    void getLowStockProducts_shouldNormalizeStatus() {
+
+        authenticateAdmin();
+
+        when(productRepository.findAll(
+                any(Specification.class),
+                any(Pageable.class)
+        )).thenReturn(Page.empty());
+
+        assertDoesNotThrow(() ->
+                inventoryService.getLowStockProducts(
+                        0,
+                        10,
+                        "availableQuantity",
+                        "asc",
+                        "  low_stock  ",
+                        ADMIN_EMAIL
+                )
+        );
+
+        verify(productRepository).findAll(
+                any(Specification.class),
+                any(Pageable.class)
+        );
+    }
+
+    @Test
+    void getLowStockProducts_shouldRejectNegativePage() {
+
+        authenticateAdmin();
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.getLowStockProducts(
+                        -1, 10, "availableQuantity", "asc",
+                        null, ADMIN_EMAIL
+                )
+        );
+
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getStatusCode());
+        verifyNoInteractions(productRepository);
+    }
+
+    @Test
+    void getLowStockProducts_shouldRejectInvalidPageSize() {
+
+        authenticateAdmin();
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.getLowStockProducts(
+                        0, 0, "availableQuantity", "asc",
+                        null, ADMIN_EMAIL
+                )
+        );
+
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getStatusCode());
+        verifyNoInteractions(productRepository);
+    }
+
+    @Test
+    void getLowStockProducts_shouldRejectPageSizeAboveMaximum() {
+
+        authenticateAdmin();
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.getLowStockProducts(
+                        0, 101, "availableQuantity", "asc",
+                        null, ADMIN_EMAIL
+                )
+        );
+
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getStatusCode());
+        verifyNoInteractions(productRepository);
+    }
+
+    @Test
+    void getLowStockProducts_shouldRejectInvalidSortField() {
+
+        authenticateAdmin();
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.getLowStockProducts(
+                        0, 10, "password", "asc",
+                        null, ADMIN_EMAIL
+                )
+        );
+
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getStatusCode());
+        verifyNoInteractions(productRepository);
+    }
+
+    @Test
+    void getLowStockProducts_shouldRejectInvalidSortDirection() {
+
+        authenticateAdmin();
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.getLowStockProducts(
+                        0, 10, "availableQuantity", "random",
+                        null, ADMIN_EMAIL
+                )
+        );
+
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getStatusCode());
+        verifyNoInteractions(productRepository);
+    }
+
+    @Test
+    void getLowStockProducts_shouldRejectInvalidStatus() {
+
+        authenticateAdmin();
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.getLowStockProducts(
+                        0, 10, "availableQuantity", "asc",
+                        "CRITICAL", ADMIN_EMAIL
+                )
+        );
+
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getStatusCode());
+        verifyNoInteractions(productRepository);
+    }
+
+    @Test
+    void getLowStockProducts_shouldRejectBuyer() {
+
+        when(buyer.isEnabled()).thenReturn(true);
+        when(buyer.getRole()).thenReturn(UserRole.BUYER);
+
+        when(userRepository.findByEmail(ADMIN_EMAIL))
+                .thenReturn(Optional.of(buyer));
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.getLowStockProducts(
+                        0, 10, "availableQuantity", "asc",
+                        null, ADMIN_EMAIL
+                )
+        );
+
+        assertEquals(HttpStatus.FORBIDDEN, exception.getStatusCode());
+        verifyNoInteractions(productRepository);
+    }
+
+    @Test
+    void getLowStockProducts_shouldRejectSupplier() {
+
+        when(supplier.isEnabled()).thenReturn(true);
+        when(supplier.getRole()).thenReturn(UserRole.SUPPLIER);
+
+        when(userRepository.findByEmail(ADMIN_EMAIL))
+                .thenReturn(Optional.of(supplier));
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.getLowStockProducts(
+                        0, 10, "availableQuantity", "asc",
+                        null, ADMIN_EMAIL
+                )
+        );
+
+        assertEquals(HttpStatus.FORBIDDEN, exception.getStatusCode());
+        verifyNoInteractions(productRepository);
+    }
+
+    @Test
+    void getLowStockProducts_shouldRejectDisabledAdmin() {
+
+        when(admin.isEnabled()).thenReturn(false);
+
+        when(userRepository.findByEmail(ADMIN_EMAIL))
+                .thenReturn(Optional.of(admin));
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.getLowStockProducts(
+                        0, 10, "availableQuantity", "asc",
+                        null, ADMIN_EMAIL
+                )
+        );
+
+        assertEquals(HttpStatus.FORBIDDEN, exception.getStatusCode());
+        verifyNoInteractions(productRepository);
+    }
+
+    // --------------------------------------------------
     // Stock-in tests
     // --------------------------------------------------
 

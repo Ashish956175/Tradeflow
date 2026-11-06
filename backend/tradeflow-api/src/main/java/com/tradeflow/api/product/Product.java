@@ -35,6 +35,9 @@ public class Product {
     @Column(nullable = false)
     private Integer availableQuantity;
 
+    @Column(name = "low_stock_threshold", nullable = false)
+    private Integer lowStockThreshold = 10;
+
     @Column(nullable = false, length = 30)
     private String unit;
 
@@ -91,6 +94,14 @@ public class Product {
 
     public void setAvailableQuantity(Integer availableQuantity) {
         this.availableQuantity = availableQuantity;
+    }
+
+    public Integer getLowStockThreshold() {
+        return lowStockThreshold;
+    }
+
+    public void setLowStockThreshold(Integer lowStockThreshold) {
+        this.lowStockThreshold = lowStockThreshold;
     }
 
     public String getUnit() {

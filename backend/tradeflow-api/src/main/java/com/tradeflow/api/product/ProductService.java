@@ -53,6 +53,13 @@ public class ProductService {
         product.setSku(request.sku());
         product.setUnitPrice(request.unitPrice());
         product.setAvailableQuantity(request.availableQuantity());
+
+        product.setLowStockThreshold(
+                request.lowStockThreshold() != null
+                        ? request.lowStockThreshold()
+                        : 10
+        );
+
         product.setUnit(request.unit());
 
         return productRepository.save(product);

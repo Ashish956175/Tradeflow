@@ -187,10 +187,12 @@ public class SecurityConfig {
                                 "/api/v1/products"
                         ).hasAnyRole("SUPPLIER", "ADMIN")
 
-                        // Inventory transaction history: admin only
+
+                        // Inventory transaction history and low-stock alerts: admin only
                         .requestMatchers(
                                 HttpMethod.GET,
-                                "/api/v1/inventory/transactions"
+                                "/api/v1/inventory/transactions",
+                                "/api/v1/inventory/low-stock"
                         ).hasRole("ADMIN")
 
                         // Manual inventory operations: admin only

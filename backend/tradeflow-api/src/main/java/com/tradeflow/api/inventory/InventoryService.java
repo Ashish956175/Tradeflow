@@ -39,6 +39,14 @@ public class InventoryService {
             "previousQuantity",
             "newQuantity"
     );
+    private static final Set<String> ALLOWED_LOW_STOCK_SORT_FIELDS = Set.of(
+            "id",
+            "name",
+            "sku",
+            "availableQuantity",
+            "lowStockThreshold",
+            "createdAt"
+    );
 
     public InventoryService(
             ProductRepository productRepository,
@@ -136,6 +144,87 @@ public class InventoryService {
         // Retrieve transactions and map them to response DTOs.
         return transactionRepository.findAll(specification, pageable)
                 .map(InventoryTransactionResponse::from);
+    }
+
+    // Retrieves paginated low-stock and out-of-stock products for administrators.
+    @Transactional(readOnly = true)
+    public Page<LowStockProductResponse> getLowStockProducts(
+            int page,
+            int size,
+            String sortBy,
+            String direction,
+            String status,
+            String authenticatedEmail
+    ) {
+        // Verify administrator access.
+        getAuthenticatedAdmin(authenticatedEmail);
+
+        // Validate pagination.
+        if (page < 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Page index cannot be negative"
+            );
+        }
+
+        if (size < 1 || size > MAX_PAGE_SIZE) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Page size must be between 1 and " + MAX_PAGE_SIZE
+            );
+        }
+
+        // Validate sorting field.
+        if (sortBy == null || !ALLOWED_LOW_STOCK_SORT_FIELDS.contains(sortBy)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Invalid sort field. Allowed fields: "
+                            + ALLOWED_LOW_STOCK_SORT_FIELDS
+            );
+        }
+
+        // Validate sorting direction.
+        Sort.Direction sortDirection;
+
+        try {
+            sortDirection = Sort.Direction.fromString(direction);
+        } catch (IllegalArgumentException | NullPointerException exception) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Sort direction must be 'asc' or 'desc'"
+            );
+        }
+
+        // Validate optional stock status.
+        String normalizedStatus = status == null || status.isBlank()
+                ? null
+                : status.trim().toUpperCase(Locale.ROOT);
+
+        if (normalizedStatus != null
+                && !Set.of("LOW_STOCK", "OUT_OF_STOCK")
+                .contains(normalizedStatus)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Status must be 'LOW_STOCK' or 'OUT_OF_STOCK'"
+            );
+        }
+
+        // Build pagination and sorting.
+        Pageable pageable = PageRequest.of(
+                page,
+                size,
+                Sort.by(sortDirection, sortBy)
+        );
+
+        // Retrieve products whose available quantity is at or below threshold.
+        Specification<Product> specification =
+                Specification.<Product>unrestricted()
+                        .and(com.tradeflow.api.product.ProductSpecification.isLowStock())
+                        .and(com.tradeflow.api.product.ProductSpecification
+                                .hasStockStatus(normalizedStatus));
+
+        return productRepository.findAll(specification, pageable)
+                .map(LowStockProductResponse::from);
     }
 
     // Admin manually adds stock to a product.
