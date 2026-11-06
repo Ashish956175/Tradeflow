@@ -2,27 +2,28 @@ package com.tradeflow.api.inventory;
 
 import com.tradeflow.api.order.PurchaseOrder;
 import com.tradeflow.api.product.InventorySummaryProjection;
+import com.tradeflow.api.product.InventoryValuationProjection;
 import com.tradeflow.api.product.Product;
 import com.tradeflow.api.product.ProductRepository;
-
 import com.tradeflow.api.user.User;
 import com.tradeflow.api.user.UserRepository;
 import com.tradeflow.api.user.UserRole;
-import org.springframework.http.HttpStatus;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.server.ResponseStatusException;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
-import java.util.Set;
-
 import java.util.Locale;
+import java.util.Set;
 
 @Service
 public class InventoryService {
@@ -41,6 +42,7 @@ public class InventoryService {
             "previousQuantity",
             "newQuantity"
     );
+
     private static final Set<String> ALLOWED_LOW_STOCK_SORT_FIELDS = Set.of(
             "id",
             "name",
@@ -247,6 +249,38 @@ public class InventoryService {
                 summary.getLowStockProducts(),
                 summary.getOutOfStockProducts(),
                 summary.getHealthyStockProducts()
+        );
+    }
+
+    // Retrieves estimated inventory valuation at selling price for administrators.
+    @Transactional(readOnly = true)
+    public InventoryValuationResponse getInventoryValuation(
+            String authenticatedEmail
+    ) {
+        // Verify administrator access.
+        getAuthenticatedAdmin(authenticatedEmail);
+
+        // Retrieve aggregated valuation directly from the database.
+        InventoryValuationProjection valuation =
+                productRepository.getInventoryValuation();
+
+        Long totalInventoryUnits = valuation.getTotalInventoryUnits();
+        BigDecimal totalInventoryValue = valuation.getTotalInventoryValue();
+
+        // Calculate quantity-weighted average unit value.
+        BigDecimal averageUnitValue = totalInventoryUnits == 0L
+                ? BigDecimal.ZERO.setScale(2)
+                : totalInventoryValue.divide(
+                BigDecimal.valueOf(totalInventoryUnits),
+                2,
+                RoundingMode.HALF_UP
+        );
+
+        return new InventoryValuationResponse(
+                valuation.getTotalProducts(),
+                totalInventoryUnits,
+                totalInventoryValue,
+                averageUnitValue
         );
     }
 

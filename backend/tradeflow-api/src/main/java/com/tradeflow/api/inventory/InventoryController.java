@@ -113,4 +113,14 @@ public class InventoryController {
                 authentication.getName()
         );
     }
+
+    // Returns estimated inventory valuation at selling price.
+    @GetMapping("/valuation")
+    public InventoryValuationResponse getInventoryValuation(
+            Authentication authentication
+    ) {
+        return inventoryService.getInventoryValuation(
+                authentication.getName()
+        );
+    }
 }

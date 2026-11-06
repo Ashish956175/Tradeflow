@@ -9,6 +9,8 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.data.jpa.repository.Lock;
 import java.util.Optional;
 
+
+
 public interface ProductRepository
         extends JpaRepository<Product, Long>,
         JpaSpecificationExecutor<Product> {
@@ -62,4 +64,16 @@ public interface ProductRepository
             FROM Product p
             """)
     InventorySummaryProjection getInventorySummary();
+
+    @Query("""
+            SELECT
+                COUNT(p) AS totalProducts,
+                COALESCE(SUM(p.availableQuantity), 0L) AS totalInventoryUnits,
+                COALESCE(
+                    SUM(p.unitPrice * p.availableQuantity),
+                    0.00
+                ) AS totalInventoryValue
+            FROM Product p
+            """)
+    InventoryValuationProjection getInventoryValuation();
 }

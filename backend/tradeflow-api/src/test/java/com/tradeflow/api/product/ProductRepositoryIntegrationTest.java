@@ -321,4 +321,59 @@ class ProductRepositoryIntegrationTest {
         assertEquals(0L, summary.getHealthyStockProducts());
     }
 
+    // --------------------------------------------------
+// Inventory valuation integration tests
+// --------------------------------------------------
+
+    @Test
+    @Transactional
+    void getInventoryValuation_shouldReturnCorrectAggregatedValues() {
+
+        // Ensure a predictable test dataset.
+        productRepository.deleteAllInBatch();
+
+        // Product 1: 10 units × ₹100 = ₹1,000.
+        createProduct(10);
+
+        // Product 2: 5 units × ₹50 = ₹250.
+        Product secondProduct = createProduct(5);
+        secondProduct.setUnitPrice(new BigDecimal("50.00"));
+        productRepository.saveAndFlush(secondProduct);
+
+        // Product 3: 0 units × ₹200 = ₹0.
+        Product thirdProduct = createProduct(0);
+        thirdProduct.setUnitPrice(new BigDecimal("200.00"));
+        productRepository.saveAndFlush(thirdProduct);
+
+        InventoryValuationProjection valuation =
+                productRepository.getInventoryValuation();
+
+        assertEquals(3L, valuation.getTotalProducts());
+        assertEquals(15L, valuation.getTotalInventoryUnits());
+
+        assertEquals(
+                0,
+                new BigDecimal("1250.00")
+                        .compareTo(valuation.getTotalInventoryValue())
+        );
+    }
+
+    @Test
+    @Transactional
+    void getInventoryValuation_shouldReturnZerosWhenNoProductsExist() {
+
+        productRepository.deleteAllInBatch();
+
+        InventoryValuationProjection valuation =
+                productRepository.getInventoryValuation();
+
+        assertEquals(0L, valuation.getTotalProducts());
+        assertEquals(0L, valuation.getTotalInventoryUnits());
+
+        assertEquals(
+                0,
+                BigDecimal.ZERO.compareTo(valuation.getTotalInventoryValue())
+        );
+    }
+
 }
