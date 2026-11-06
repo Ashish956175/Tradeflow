@@ -278,4 +278,47 @@ class ProductRepositoryIntegrationTest {
         assertTrue(!outOfStockIds.contains(aboveThreshold.getId()));
     }
 
+    // --------------------------------------------------
+    // Inventory dashboard summary integration tests
+    // --------------------------------------------------
+
+    @Test
+    @Transactional
+    void getInventorySummary_shouldReturnCorrectAggregatedMetrics() {
+
+        // Ensure a predictable test dataset.
+        productRepository.deleteAllInBatch();
+
+        // Create products covering all stock classifications.
+        createProduct(0, 10);
+        createProduct(5, 10);
+        createProduct(10, 10);
+        createProduct(11, 10);
+
+        InventorySummaryProjection summary =
+                productRepository.getInventorySummary();
+
+        assertEquals(4L, summary.getTotalProducts());
+        assertEquals(26L, summary.getTotalInventoryUnits());
+        assertEquals(2L, summary.getLowStockProducts());
+        assertEquals(1L, summary.getOutOfStockProducts());
+        assertEquals(1L, summary.getHealthyStockProducts());
+    }
+
+    @Test
+    @Transactional
+    void getInventorySummary_shouldReturnZerosWhenNoProductsExist() {
+
+        productRepository.deleteAllInBatch();
+
+        InventorySummaryProjection summary =
+                productRepository.getInventorySummary();
+
+        assertEquals(0L, summary.getTotalProducts());
+        assertEquals(0L, summary.getTotalInventoryUnits());
+        assertEquals(0L, summary.getLowStockProducts());
+        assertEquals(0L, summary.getOutOfStockProducts());
+        assertEquals(0L, summary.getHealthyStockProducts());
+    }
+
 }

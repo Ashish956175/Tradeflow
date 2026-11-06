@@ -1,4 +1,5 @@
 package com.tradeflow.api.inventory;
+import com.tradeflow.api.product.InventorySummaryProjection;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
@@ -12,6 +13,8 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 import com.tradeflow.api.product.Product;
+import com.tradeflow.api.product.InventorySummaryProjection;
+
 import com.tradeflow.api.product.ProductRepository;
 import com.tradeflow.api.user.User;
 import com.tradeflow.api.user.UserRepository;
@@ -1524,6 +1527,76 @@ class InventoryServiceTest {
 
         verify(productRepository, never()).save(any(Product.class));
         verifyNoInteractions(transactionRepository);
+    }
+
+    // --------------------------------------------------
+// Inventory dashboard summary tests
+// --------------------------------------------------
+
+    @Test
+    void getInventorySummary_shouldReturnAggregatedMetricsForAdmin() {
+
+        authenticateAdmin();
+
+        InventorySummaryProjection summary =
+                mock(InventorySummaryProjection.class);
+
+        when(summary.getTotalProducts()).thenReturn(150L);
+        when(summary.getTotalInventoryUnits()).thenReturn(25000L);
+        when(summary.getLowStockProducts()).thenReturn(12L);
+        when(summary.getOutOfStockProducts()).thenReturn(3L);
+        when(summary.getHealthyStockProducts()).thenReturn(135L);
+
+        when(productRepository.getInventorySummary())
+                .thenReturn(summary);
+
+        InventorySummaryResponse response =
+                inventoryService.getInventorySummary(ADMIN_EMAIL);
+
+        assertEquals(150L, response.totalProducts());
+        assertEquals(25000L, response.totalInventoryUnits());
+        assertEquals(12L, response.lowStockProducts());
+        assertEquals(3L, response.outOfStockProducts());
+        assertEquals(135L, response.healthyStockProducts());
+
+        verify(productRepository, times(1)).getInventorySummary();
+    }
+
+    @Test
+    void getInventorySummary_shouldRejectBuyer() {
+
+        when(buyer.isEnabled()).thenReturn(true);
+        when(buyer.getRole()).thenReturn(UserRole.BUYER);
+
+        when(userRepository.findByEmail(ADMIN_EMAIL))
+                .thenReturn(Optional.of(buyer));
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.getInventorySummary(ADMIN_EMAIL)
+        );
+
+        assertEquals(HttpStatus.FORBIDDEN, exception.getStatusCode());
+
+        verifyNoInteractions(productRepository);
+    }
+
+    @Test
+    void getInventorySummary_shouldRejectDisabledAdmin() {
+
+        when(admin.isEnabled()).thenReturn(false);
+
+        when(userRepository.findByEmail(ADMIN_EMAIL))
+                .thenReturn(Optional.of(admin));
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.getInventorySummary(ADMIN_EMAIL)
+        );
+
+        assertEquals(HttpStatus.FORBIDDEN, exception.getStatusCode());
+
+        verifyNoInteractions(productRepository);
     }
 
 

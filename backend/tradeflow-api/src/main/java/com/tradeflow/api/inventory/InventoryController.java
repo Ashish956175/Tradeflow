@@ -103,4 +103,14 @@ public class InventoryController {
                 authentication.getName()
         );
     }
+
+    // Returns aggregated inventory dashboard metrics.
+    @GetMapping("/summary")
+    public InventorySummaryResponse getInventorySummary(
+            Authentication authentication
+    ) {
+        return inventoryService.getInventorySummary(
+                authentication.getName()
+        );
+    }
 }

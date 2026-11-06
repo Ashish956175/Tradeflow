@@ -192,7 +192,8 @@ public class SecurityConfig {
                         .requestMatchers(
                                 HttpMethod.GET,
                                 "/api/v1/inventory/transactions",
-                                "/api/v1/inventory/low-stock"
+                                "/api/v1/inventory/low-stock",
+                                "/api/v1/inventory/summary"
                         ).hasRole("ADMIN")
 
                         // Manual inventory operations: admin only

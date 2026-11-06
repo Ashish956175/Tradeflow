@@ -7,7 +7,6 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.data.jpa.repository.Lock;
-
 import java.util.Optional;
 
 public interface ProductRepository
@@ -42,4 +41,25 @@ public interface ProductRepository
             @Param("productId") Long productId,
             @Param("quantity") int quantity
     );
+
+    @Query("""
+            SELECT
+                COUNT(p) AS totalProducts,
+                COALESCE(SUM(p.availableQuantity), 0L) AS totalInventoryUnits,
+                COUNT(CASE
+                    WHEN p.availableQuantity > 0
+                     AND p.availableQuantity <= p.lowStockThreshold
+                    THEN p.id
+                END) AS lowStockProducts,
+                COUNT(CASE
+                    WHEN p.availableQuantity = 0
+                    THEN p.id
+                END) AS outOfStockProducts,
+                COUNT(CASE
+                    WHEN p.availableQuantity > p.lowStockThreshold
+                    THEN p.id
+                END) AS healthyStockProducts
+            FROM Product p
+            """)
+    InventorySummaryProjection getInventorySummary();
 }

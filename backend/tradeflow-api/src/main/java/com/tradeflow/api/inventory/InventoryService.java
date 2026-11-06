@@ -1,8 +1,10 @@
 package com.tradeflow.api.inventory;
 
 import com.tradeflow.api.order.PurchaseOrder;
+import com.tradeflow.api.product.InventorySummaryProjection;
 import com.tradeflow.api.product.Product;
 import com.tradeflow.api.product.ProductRepository;
+
 import com.tradeflow.api.user.User;
 import com.tradeflow.api.user.UserRepository;
 import com.tradeflow.api.user.UserRole;
@@ -225,6 +227,27 @@ public class InventoryService {
 
         return productRepository.findAll(specification, pageable)
                 .map(LowStockProductResponse::from);
+    }
+
+    // Retrieves aggregated inventory dashboard metrics for administrators.
+    @Transactional(readOnly = true)
+    public InventorySummaryResponse getInventorySummary(
+            String authenticatedEmail
+    ) {
+        // Verify administrator access.
+        getAuthenticatedAdmin(authenticatedEmail);
+
+        // Retrieve aggregated metrics directly from the database.
+        InventorySummaryProjection summary =
+                productRepository.getInventorySummary();
+
+        return new InventorySummaryResponse(
+                summary.getTotalProducts(),
+                summary.getTotalInventoryUnits(),
+                summary.getLowStockProducts(),
+                summary.getOutOfStockProducts(),
+                summary.getHealthyStockProducts()
+        );
     }
 
     // Admin manually adds stock to a product.
