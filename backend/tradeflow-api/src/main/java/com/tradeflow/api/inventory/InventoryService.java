@@ -543,6 +543,34 @@ public class InventoryService {
         );
     }
 
+    // Records physical dispatch without deducting reserved inventory again.
+    @Transactional
+    public void recordShipmentForOrder(
+            Long productId,
+            int quantity,
+            User performedBy,
+            PurchaseOrder purchaseOrder
+    ) {
+        validateQuantity(quantity);
+
+        Product product = getProductForUpdate(productId);
+
+        // availableQuantity was already reduced when the order was confirmed.
+        // Keep the balance unchanged and record the dispatch event only.
+        int availableQuantity = product.getAvailableQuantity();
+
+        recordTransaction(
+                product,
+                purchaseOrder,
+                performedBy,
+                InventoryTransactionType.SHIPPED,
+                quantity,
+                availableQuantity,
+                availableQuantity,
+                "Inventory dispatched for purchase order"
+        );
+    }
+
     private User getAuthenticatedAdmin(String email) {
         String normalizedEmail = email.trim()
                 .toLowerCase(Locale.ROOT);

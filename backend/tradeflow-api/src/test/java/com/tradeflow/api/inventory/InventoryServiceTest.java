@@ -1,6 +1,8 @@
 package com.tradeflow.api.inventory;
 import com.tradeflow.api.product.InventorySummaryProjection;
 
+import com.tradeflow.api.order.PurchaseOrder;
+
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
@@ -38,6 +40,8 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
+
+import static org.mockito.ArgumentMatchers.anyInt;
 
 @ExtendWith(MockitoExtension.class)
 class InventoryServiceTest {
@@ -789,6 +793,55 @@ class InventoryServiceTest {
 
         assertEquals(HttpStatus.FORBIDDEN, exception.getStatusCode());
         verifyNoInteractions(productRepository);
+    }
+
+    // --------------------------------------------------
+    // Shipment recording tests
+    // --------------------------------------------------
+
+    @Test
+    void recordShipmentForOrder_shouldRecordShipmentWithoutDeductingInventory() {
+
+        PurchaseOrder purchaseOrder = mock(PurchaseOrder.class);
+
+        when(productRepository.findByIdForUpdate(PRODUCT_ID))
+                .thenReturn(Optional.of(product));
+
+        when(product.getAvailableQuantity()).thenReturn(20);
+
+        inventoryService.recordShipmentForOrder(
+                PRODUCT_ID,
+                80,
+                admin,
+                purchaseOrder
+        );
+
+        ArgumentCaptor<InventoryTransaction> captor =
+                ArgumentCaptor.forClass(InventoryTransaction.class);
+
+        verify(transactionRepository).save(captor.capture());
+
+        InventoryTransaction transaction = captor.getValue();
+
+        assertEquals(
+                InventoryTransactionType.SHIPPED,
+                transaction.getTransactionType()
+        );
+
+        assertEquals(80, transaction.getQuantity());
+        assertSame(purchaseOrder, transaction.getPurchaseOrder());
+        assertSame(admin, transaction.getPerformedBy());
+
+        assertEquals(20, transaction.getPreviousQuantity());
+        assertEquals(20, transaction.getNewQuantity());
+
+        assertEquals(
+                "Inventory dispatched for purchase order",
+                transaction.getReason()
+        );
+
+        verify(productRepository, never()).save(any(Product.class));
+        verify(product, never()).setAvailableQuantity(anyInt());
     }
 
     // --------------------------------------------------

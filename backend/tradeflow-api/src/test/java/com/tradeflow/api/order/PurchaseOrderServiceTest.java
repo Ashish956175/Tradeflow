@@ -293,6 +293,123 @@ class PurchaseOrderServiceTest {
     }
 
     // --------------------------------------------------
+    // Ship order tests
+    // --------------------------------------------------
+
+    @Test
+    void shipOrder_shouldRecordShipmentAndPreserveAvailableInventory() {
+        authenticateAdmin();
+        when(purchaseOrderRepository.findByIdForUpdate(ORDER_ID))
+                .thenReturn(Optional.of(order));
+
+        when(order.getOrderedQuantity()).thenReturn(5);
+        configureProductRelationship();
+
+        when(purchaseOrderRepository.save(order))
+                .thenReturn(order);
+
+        PurchaseOrder result = purchaseOrderService.shipOrder(
+                ORDER_ID,
+                ADMIN_EMAIL
+        );
+
+        assertSame(order, result);
+
+        verify(order).ship();
+
+        verify(inventoryService).recordShipmentForOrder(
+                PRODUCT_ID,
+                5,
+                admin,
+                order
+        );
+
+        verify(purchaseOrderRepository).save(order);
+    }
+
+    @Test
+    void shipOrder_shouldRejectInvalidOrderStatus() {
+        authenticateAdmin();
+        when(purchaseOrderRepository.findByIdForUpdate(ORDER_ID))
+                .thenReturn(Optional.of(order));
+
+        doThrow(new IllegalStateException("Order must be confirmed before shipping"))
+                .when(order).ship();
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> purchaseOrderService.shipOrder(
+                        ORDER_ID,
+                        ADMIN_EMAIL
+                )
+        );
+
+        assertEquals(409, exception.getStatusCode().value());
+
+        verifyNoInteractions(inventoryService);
+
+        verify(purchaseOrderRepository, never()).save(any());
+    }
+
+    @Test
+    void shipOrder_shouldRejectNonAdmin() {
+        authenticateBuyer();
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> purchaseOrderService.shipOrder(
+                        ORDER_ID,
+                        BUYER_EMAIL
+                )
+        );
+
+        assertEquals(403, exception.getStatusCode().value());
+
+        verifyNoInteractions(inventoryService);
+
+        verify(purchaseOrderRepository, never())
+                .findByIdForUpdate(anyLong());
+    }
+
+    @Test
+    void shipOrder_shouldNotSaveOrderWhenInventoryRecordingFails() {
+        authenticateAdmin();
+        when(purchaseOrderRepository.findByIdForUpdate(ORDER_ID))
+                .thenReturn(Optional.of(order));
+
+        when(order.getOrderedQuantity()).thenReturn(5);
+        configureProductRelationship();
+
+        doThrow(new RuntimeException("Inventory recording failed"))
+                .when(inventoryService)
+                .recordShipmentForOrder(
+                        PRODUCT_ID,
+                        5,
+                        admin,
+                        order
+                );
+
+        assertThrows(
+                RuntimeException.class,
+                () -> purchaseOrderService.shipOrder(
+                        ORDER_ID,
+                        ADMIN_EMAIL
+                )
+        );
+
+        verify(order).ship();
+
+        verify(inventoryService).recordShipmentForOrder(
+                PRODUCT_ID,
+                5,
+                admin,
+                order
+        );
+
+        verify(purchaseOrderRepository, never()).save(any());
+    }
+
+    // --------------------------------------------------
     // Cancel order tests
     // --------------------------------------------------
 

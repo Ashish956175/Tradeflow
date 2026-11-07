@@ -207,7 +207,11 @@ public class PurchaseOrderService {
         User user = getAuthenticatedUser(authenticatedEmail);
         requireRole(user, UserRole.ADMIN);
 
-        PurchaseOrder order = findOrderById(id);
+        PurchaseOrder order = purchaseOrderRepository.findByIdForUpdate(id)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "Purchase order not found"
+                ));
 
         try {
             order.ship();
@@ -217,6 +221,18 @@ public class PurchaseOrderService {
                     exception.getMessage()
             );
         }
+
+        Long productId = order.getQuotation()
+                .getProcurementRequest()
+                .getProduct()
+                .getId();
+
+        inventoryService.recordShipmentForOrder(
+                productId,
+                order.getOrderedQuantity(),
+                user,
+                order
+        );
 
         return purchaseOrderRepository.save(order);
     }

@@ -119,6 +119,11 @@ class InventoryTransactionRepositoryIntegrationTest {
                 InventoryTransactionType.STOCK_OUT,
                 30, 100, 70
         );
+        createTransaction(
+                product, admin,
+                InventoryTransactionType.SHIPPED,
+                15, 80, 80
+        );
 
         createTransaction(
                 product, admin,
@@ -153,12 +158,13 @@ class InventoryTransactionRepositoryIntegrationTest {
                 );
 
         assertEquals(100L, analytics.getTotalStockIn());
-        assertEquals(30L, analytics.getTotalStockOut());
+        assertEquals(45L, analytics.getTotalStockOut());
         assertEquals(20L, analytics.getAdjustmentIncrease());
         assertEquals(10L, analytics.getAdjustmentDecrease());
 
-        // Only STOCK_IN, STOCK_OUT and ADJUSTMENT are counted.
-        assertEquals(4L, analytics.getTotalTransactions());
+        // STOCK_IN, STOCK_OUT, SHIPPED and ADJUSTMENT are counted.
+        // RESERVED and RELEASED are excluded.
+        assertEquals(5L, analytics.getTotalTransactions());
     }
 
     @Test

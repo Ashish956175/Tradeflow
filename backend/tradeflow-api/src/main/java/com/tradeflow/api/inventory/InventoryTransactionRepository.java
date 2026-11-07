@@ -28,7 +28,10 @@ public interface InventoryTransactionRepository
 
                 COALESCE(SUM(
                     CASE
-                        WHEN t.transactionType = com.tradeflow.api.inventory.InventoryTransactionType.STOCK_OUT
+                        WHEN t.transactionType IN (
+                            com.tradeflow.api.inventory.InventoryTransactionType.STOCK_OUT,
+                            com.tradeflow.api.inventory.InventoryTransactionType.SHIPPED
+                        )
                         THEN t.quantity
                         ELSE 0
                     END
@@ -57,6 +60,7 @@ public interface InventoryTransactionRepository
                         WHEN t.transactionType IN (
                             com.tradeflow.api.inventory.InventoryTransactionType.STOCK_IN,
                             com.tradeflow.api.inventory.InventoryTransactionType.STOCK_OUT,
+                            com.tradeflow.api.inventory.InventoryTransactionType.SHIPPED,
                             com.tradeflow.api.inventory.InventoryTransactionType.ADJUSTMENT
                         )
                         THEN t.id

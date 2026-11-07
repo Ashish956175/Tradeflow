@@ -1,5 +1,8 @@
 package com.tradeflow.api.order;
 
+import com.tradeflow.api.inventory.InventoryTransaction;
+import com.tradeflow.api.inventory.InventoryTransactionRepository;
+import com.tradeflow.api.inventory.InventoryTransactionType;
 import com.tradeflow.api.organization.Organization;
 import com.tradeflow.api.organization.OrganizationRepository;
 import com.tradeflow.api.product.Product;
@@ -21,12 +24,15 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 import org.testcontainers.containers.MySQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.List;
 
 import org.springframework.jdbc.core.JdbcTemplate;
 
@@ -66,6 +72,9 @@ class PurchaseOrderServiceIntegrationTest {
 
     @Autowired
     private PurchaseOrderRepository purchaseOrderRepository;
+
+    @Autowired
+    private InventoryTransactionRepository inventoryTransactionRepository;
 
     @Autowired
     private ProductRepository productRepository;
@@ -202,6 +211,61 @@ class PurchaseOrderServiceIntegrationTest {
     }
 
     @Test
+    void shipOrder_shouldPersistShipmentTransactionWithoutDeductingInventoryAgain() {
+
+        TestData data = createTestData(100);
+
+        // Confirm order: inventory 100 -> 20.
+        purchaseOrderService.confirmOrder(
+                data.orderId(),
+                ADMIN_EMAIL
+        );
+
+        // Ship order: record dispatch without changing available inventory.
+        PurchaseOrder shippedOrder = purchaseOrderService.shipOrder(
+                data.orderId(),
+                ADMIN_EMAIL
+        );
+
+        Product updatedProduct = productRepository
+                .findById(data.productId())
+                .orElseThrow();
+
+        PurchaseOrder persistedOrder = purchaseOrderRepository
+                .findById(data.orderId())
+                .orElseThrow();
+
+        List<InventoryTransaction> transactions =
+                inventoryTransactionRepository
+                        .findByPurchaseOrder_IdOrderByCreatedAtDesc(
+                                data.orderId()
+                        );
+
+        InventoryTransaction shipmentTransaction = transactions.stream()
+                .filter(transaction ->
+                        transaction.getTransactionType()
+                                == InventoryTransactionType.SHIPPED)
+                .findFirst()
+                .orElseThrow();
+
+        assertEquals(OrderStatus.SHIPPED, shippedOrder.getStatus());
+        assertEquals(OrderStatus.SHIPPED, persistedOrder.getStatus());
+
+        // Available inventory must remain 20 after shipment.
+        assertEquals(20, updatedProduct.getAvailableQuantity());
+
+        assertEquals(80, shipmentTransaction.getQuantity());
+        assertEquals(20, shipmentTransaction.getPreviousQuantity());
+        assertEquals(20, shipmentTransaction.getNewQuantity());
+        assertEquals(data.orderId(),
+                shipmentTransaction.getPurchaseOrder().getId());
+        assertEquals(
+                InventoryTransactionType.SHIPPED,
+                shipmentTransaction.getTransactionType()
+        );
+    }
+
+    @Test
     void cancelConfirmedOrder_shouldReleaseInventoryAndPersistCancelledStatus() {
 
         TestData data = createTestData(100);
@@ -257,6 +321,72 @@ class PurchaseOrderServiceIntegrationTest {
         assertEquals(409, exception.getStatusCode().value());
         assertEquals(50, product.getAvailableQuantity());
         assertEquals(OrderStatus.CREATED, order.getStatus());
+    }
+
+    @Test
+    void shipOrder_whenDatabaseUpdateFails_shouldRollbackShipmentTransaction() {
+
+        TestData data = createTestData(100);
+
+        // Confirm order: inventory decreases from 100 to 20.
+        purchaseOrderService.confirmOrder(
+                data.orderId(),
+                ADMIN_EMAIL
+        );
+
+        // Create a trigger that deliberately rejects purchase-order updates.
+        jdbcTemplate.execute("""
+        CREATE TRIGGER test_fail_shipment_order_update
+        BEFORE UPDATE ON purchase_orders
+        FOR EACH ROW
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Simulated shipment database failure'
+        """);
+
+        try {
+            // Shipping should fail and roll back the entire transaction.
+            assertThrows(
+                    RuntimeException.class,
+                    () -> purchaseOrderService.shipOrder(
+                            data.orderId(),
+                            ADMIN_EMAIL
+                    )
+            );
+
+        } finally {
+            // Always remove the test trigger.
+            jdbcTemplate.execute(
+                    "DROP TRIGGER IF EXISTS test_fail_shipment_order_update"
+            );
+        }
+
+        Product product = productRepository
+                .findById(data.productId())
+                .orElseThrow();
+
+        PurchaseOrder order = purchaseOrderRepository
+                .findById(data.orderId())
+                .orElseThrow();
+
+        List<InventoryTransaction> transactions =
+                inventoryTransactionRepository
+                        .findByPurchaseOrder_IdOrderByCreatedAtDesc(
+                                data.orderId()
+                        );
+
+        // Order must remain confirmed.
+        assertEquals(OrderStatus.CONFIRMED, order.getStatus());
+
+        // Reserved inventory must remain unchanged.
+        assertEquals(20, product.getAvailableQuantity());
+
+        // Shipment transaction must be rolled back.
+        assertTrue(
+                transactions.stream().noneMatch(transaction ->
+                        transaction.getTransactionType()
+                                == InventoryTransactionType.SHIPPED
+                )
+        );
     }
 
     @Test
