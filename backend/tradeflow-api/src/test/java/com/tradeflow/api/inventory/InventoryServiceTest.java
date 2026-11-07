@@ -1600,4 +1600,132 @@ class InventoryServiceTest {
     }
 
 
+
+    // --------------------------------------------------
+    // Inventory movement analytics tests
+    // --------------------------------------------------
+
+    @Test
+    void getInventoryMovementAnalytics_shouldCalculateNetMovementForAdmin() {
+
+        authenticateAdmin();
+
+        InventoryMovementAnalyticsProjection analytics =
+                mock(InventoryMovementAnalyticsProjection.class);
+
+        when(analytics.getTotalStockIn()).thenReturn(1500L);
+        when(analytics.getTotalStockOut()).thenReturn(450L);
+        when(analytics.getAdjustmentIncrease()).thenReturn(100L);
+        when(analytics.getAdjustmentDecrease()).thenReturn(25L);
+        when(analytics.getTotalTransactions()).thenReturn(85L);
+
+        when(transactionRepository.getInventoryMovementAnalytics(null, null))
+                .thenReturn(analytics);
+
+        InventoryMovementAnalyticsResponse response =
+                inventoryService.getInventoryMovementAnalytics(
+                        null,
+                        null,
+                        ADMIN_EMAIL
+                );
+
+        assertEquals(1500L, response.totalStockIn());
+        assertEquals(450L, response.totalStockOut());
+        assertEquals(100L, response.adjustmentIncrease());
+        assertEquals(25L, response.adjustmentDecrease());
+        assertEquals(1125L, response.netInventoryMovement());
+        assertEquals(85L, response.totalTransactions());
+
+        verify(transactionRepository).getInventoryMovementAnalytics(null, null);
+    }
+
+    @Test
+    void getInventoryMovementAnalytics_shouldPassDateFiltersToRepository() {
+
+        authenticateAdmin();
+
+        LocalDateTime startDate =
+                LocalDateTime.of(2026, 11, 1, 0, 0);
+
+        LocalDateTime endDate =
+                LocalDateTime.of(2026, 11, 7, 23, 59);
+
+        InventoryMovementAnalyticsProjection analytics =
+                mock(InventoryMovementAnalyticsProjection.class);
+
+        when(analytics.getTotalStockIn()).thenReturn(0L);
+        when(analytics.getTotalStockOut()).thenReturn(0L);
+        when(analytics.getAdjustmentIncrease()).thenReturn(0L);
+        when(analytics.getAdjustmentDecrease()).thenReturn(0L);
+        when(analytics.getTotalTransactions()).thenReturn(0L);
+
+        when(transactionRepository.getInventoryMovementAnalytics(
+                startDate,
+                endDate
+        )).thenReturn(analytics);
+
+        InventoryMovementAnalyticsResponse response =
+                inventoryService.getInventoryMovementAnalytics(
+                        startDate,
+                        endDate,
+                        ADMIN_EMAIL
+                );
+
+        assertNotNull(response);
+        assertEquals(0L, response.netInventoryMovement());
+        assertEquals(0L, response.totalTransactions());
+
+        verify(transactionRepository).getInventoryMovementAnalytics(
+                startDate,
+                endDate
+        );
+    }
+
+    @Test
+    void getInventoryMovementAnalytics_shouldRejectInvalidDateRange() {
+
+        authenticateAdmin();
+
+        LocalDateTime startDate =
+                LocalDateTime.of(2026, 11, 7, 0, 0);
+
+        LocalDateTime endDate =
+                LocalDateTime.of(2026, 11, 1, 0, 0);
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.getInventoryMovementAnalytics(
+                        startDate,
+                        endDate,
+                        ADMIN_EMAIL
+                )
+        );
+
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getStatusCode());
+
+        verifyNoInteractions(transactionRepository);
+    }
+
+    @Test
+    void getInventoryMovementAnalytics_shouldRejectBuyer() {
+
+        when(buyer.isEnabled()).thenReturn(true);
+        when(buyer.getRole()).thenReturn(UserRole.BUYER);
+
+        when(userRepository.findByEmail(ADMIN_EMAIL))
+                .thenReturn(Optional.of(buyer));
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> inventoryService.getInventoryMovementAnalytics(
+                        null,
+                        null,
+                        ADMIN_EMAIL
+                )
+        );
+
+        assertEquals(HttpStatus.FORBIDDEN, exception.getStatusCode());
+
+        verifyNoInteractions(transactionRepository);
+    }
 }

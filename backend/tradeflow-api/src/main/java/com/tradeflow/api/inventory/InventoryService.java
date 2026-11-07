@@ -284,6 +284,53 @@ public class InventoryService {
         );
     }
 
+    // Retrieves inventory movement analytics for administrators.
+    @Transactional(readOnly = true)
+    public InventoryMovementAnalyticsResponse getInventoryMovementAnalytics(
+            LocalDateTime startDate,
+            LocalDateTime endDate,
+            String authenticatedEmail
+    ) {
+        // Verify administrator access.
+        getAuthenticatedAdmin(authenticatedEmail);
+
+        // Validate date range.
+        if (startDate != null && endDate != null
+                && startDate.isAfter(endDate)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Start date cannot be after end date"
+            );
+        }
+
+        // Retrieve aggregated movement metrics directly from the database.
+        InventoryMovementAnalyticsProjection analytics =
+                transactionRepository.getInventoryMovementAnalytics(
+                        startDate,
+                        endDate
+                );
+
+        Long totalStockIn = analytics.getTotalStockIn();
+        Long totalStockOut = analytics.getTotalStockOut();
+        Long adjustmentIncrease = analytics.getAdjustmentIncrease();
+        Long adjustmentDecrease = analytics.getAdjustmentDecrease();
+
+        // Calculate net physical inventory movement.
+        Long netInventoryMovement =
+                totalStockIn
+                        - totalStockOut
+                        + adjustmentIncrease
+                        - adjustmentDecrease;
+
+        return new InventoryMovementAnalyticsResponse(
+                totalStockIn,
+                totalStockOut,
+                adjustmentIncrease,
+                adjustmentDecrease,
+                netInventoryMovement,
+                analytics.getTotalTransactions()
+        );
+    }
     // Admin manually adds stock to a product.
     @Transactional
     public Product stockIn(

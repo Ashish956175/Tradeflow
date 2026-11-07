@@ -123,4 +123,21 @@ public class InventoryController {
                 authentication.getName()
         );
     }
+    // Returns inventory movement analytics.
+    @GetMapping("/analytics")
+    public InventoryMovementAnalyticsResponse getInventoryMovementAnalytics(
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME)
+            LocalDateTime startDate,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME)
+            LocalDateTime endDate,
+            Authentication authentication
+    ) {
+        return inventoryService.getInventoryMovementAnalytics(
+                startDate,
+                endDate,
+                authentication.getName()
+        );
+    }
 }

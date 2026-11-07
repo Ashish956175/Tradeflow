@@ -194,7 +194,8 @@ public class SecurityConfig {
                                 "/api/v1/inventory/transactions",
                                 "/api/v1/inventory/low-stock",
                                 "/api/v1/inventory/summary",
-                                "/api/v1/inventory/valuation"
+                                "/api/v1/inventory/valuation",
+                                "/api/v1/inventory/analytics"
                         ).hasRole("ADMIN")
 
                         // Manual inventory operations: admin only
