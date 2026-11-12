@@ -4,6 +4,13 @@ import com.tradeflow.api.user.User;
 import com.tradeflow.api.user.UserRepository;
 import com.tradeflow.api.user.UserRole;
 
+import com.tradeflow.api.membership.MembershipRole;
+import com.tradeflow.api.membership.MembershipStatus;
+import com.tradeflow.api.membership.OrganizationMembership;
+import com.tradeflow.api.membership.OrganizationMembershipRepository;
+
+import java.time.LocalDateTime;
+
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,13 +25,22 @@ public class OrganizationService {
 
     private final OrganizationRepository organizationRepository;
     private final UserRepository userRepository;
+    private final OrganizationCapabilityRepository organizationCapabilityRepository;
+    private final OrganizationCapabilityAuditRepository organizationCapabilityAuditRepository;
+    private final OrganizationMembershipRepository organizationMembershipRepository;
 
     public OrganizationService(
             OrganizationRepository organizationRepository,
-            UserRepository userRepository
+            UserRepository userRepository,
+            OrganizationCapabilityRepository organizationCapabilityRepository,
+            OrganizationCapabilityAuditRepository organizationCapabilityAuditRepository,
+            OrganizationMembershipRepository organizationMembershipRepository
     ) {
         this.organizationRepository = organizationRepository;
         this.userRepository = userRepository;
+        this.organizationCapabilityRepository = organizationCapabilityRepository;
+        this.organizationCapabilityAuditRepository = organizationCapabilityAuditRepository;
+        this.organizationMembershipRepository = organizationMembershipRepository;
     }
 
     @Transactional
@@ -79,9 +95,39 @@ public class OrganizationService {
         Organization savedOrganization =
                 organizationRepository.save(organization);
 
+        for (OrganizationCapability capability : request.capabilities()) {
+
+            organizationCapabilityRepository.save(
+                    new OrganizationCapabilityEntity(
+                            savedOrganization,
+                            capability
+                    )
+            );
+
+            organizationCapabilityAuditRepository.save(
+                    new OrganizationCapabilityAudit(
+                            savedOrganization,
+                            capability,
+                            OrganizationCapabilityAction.ENABLED,
+                            user,
+                            "Organization onboarding"
+                    )
+            );
+        }
+
+        OrganizationMembership ownerMembership = new OrganizationMembership(
+                user,
+                savedOrganization,
+                MembershipRole.OWNER,
+                MembershipStatus.ACTIVE,
+                LocalDateTime.now()
+        );
+
+        organizationMembershipRepository.save(ownerMembership);
+
+// Keep the legacy association temporarily
         user.setOrganization(savedOrganization);
         userRepository.save(user);
-
         return new OrganizationOnboardResponse(
                 "Organization created successfully",
                 savedOrganization.getId(),

@@ -5,6 +5,13 @@ import com.tradeflow.api.user.User;
 import com.tradeflow.api.user.UserRepository;
 import com.tradeflow.api.user.UserRole;
 
+import com.tradeflow.api.membership.MembershipRole;
+import com.tradeflow.api.membership.MembershipStatus;
+import com.tradeflow.api.membership.OrganizationMembership;
+import com.tradeflow.api.membership.OrganizationMembershipRepository;
+
+import org.mockito.ArgumentCaptor;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -15,6 +22,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
+
+import java.util.Set;
 
 import java.lang.reflect.Field;
 import java.util.List;
@@ -32,6 +41,15 @@ class OrganizationServiceTest {
 
     @Mock
     private UserRepository userRepository;
+
+    @Mock
+    private OrganizationCapabilityRepository organizationCapabilityRepository;
+
+    @Mock
+    private OrganizationCapabilityAuditRepository organizationCapabilityAuditRepository;
+
+    @Mock
+    private OrganizationMembershipRepository organizationMembershipRepository;
 
     @InjectMocks
     private OrganizationService organizationService;
@@ -100,11 +118,18 @@ class OrganizationServiceTest {
     }
 
     private OrganizationOnboardRequest validOnboardRequest() {
+        return validOnboardRequest(OrganizationCapability.BUYER);
+    }
+
+    private OrganizationOnboardRequest validOnboardRequest(
+            OrganizationCapability... capabilities
+    ) {
         return new OrganizationOnboardRequest(
                 "  TradeFlow Retailers  ",
                 "  RETAIL@EXAMPLE.COM ",
                 " 9876543210 ",
-                " Pune, Maharashtra "
+                " Pune, Maharashtra ",
+                Set.of(capabilities)
         );
     }
 
@@ -239,6 +264,53 @@ class OrganizationServiceTest {
                 buyer.getOrganization().getBusinessEmail()
         );
 
+        // Verify organization capability persistence
+        ArgumentCaptor<OrganizationCapabilityEntity> capabilityCaptor =
+                ArgumentCaptor.forClass(OrganizationCapabilityEntity.class);
+
+        verify(organizationCapabilityRepository)
+                .save(capabilityCaptor.capture());
+
+        assertEquals(
+                OrganizationCapability.BUYER,
+                capabilityCaptor.getValue().getCapability()
+        );
+
+        assertEquals(
+                10L,
+                capabilityCaptor.getValue().getOrganization().getId()
+        );
+
+        // Verify capability audit persistence
+        ArgumentCaptor<OrganizationCapabilityAudit> auditCaptor =
+                ArgumentCaptor.forClass(OrganizationCapabilityAudit.class);
+
+        verify(organizationCapabilityAuditRepository)
+                .save(auditCaptor.capture());
+
+        OrganizationCapabilityAudit audit = auditCaptor.getValue();
+
+        assertEquals(OrganizationCapability.BUYER, audit.getCapability());
+        assertEquals(OrganizationCapabilityAction.ENABLED, audit.getAction());
+        assertEquals(buyer, audit.getChangedBy());
+        assertEquals("Organization onboarding", audit.getReason());
+
+        // Verify active OWNER membership
+        ArgumentCaptor<OrganizationMembership> membershipCaptor =
+                ArgumentCaptor.forClass(OrganizationMembership.class);
+
+        verify(organizationMembershipRepository)
+                .save(membershipCaptor.capture());
+
+        OrganizationMembership membership = membershipCaptor.getValue();
+
+        assertEquals(buyer, membership.getUser());
+        assertEquals(10L, membership.getOrganization().getId());
+        assertEquals(MembershipRole.OWNER, membership.getMembershipRole());
+        assertEquals(MembershipStatus.ACTIVE, membership.getStatus());
+        assertNotNull(membership.getJoinedAt());
+
+    // Verify legacy user association is retained
         verify(userRepository).save(buyer);
     }
 
@@ -262,7 +334,7 @@ class OrganizationServiceTest {
 
         OrganizationOnboardResponse result =
                 organizationService.onboardOrganization(
-                        validOnboardRequest(),
+                        validOnboardRequest(OrganizationCapability.SUPPLIER),
                         supplier.getEmail()
                 );
 
@@ -270,7 +342,139 @@ class OrganizationServiceTest {
         assertEquals("TradeFlow Retailers", result.organizationName());
         assertNotNull(supplier.getOrganization());
 
+        // Verify organization capability persistence
+        ArgumentCaptor<OrganizationCapabilityEntity> capabilityCaptor =
+                ArgumentCaptor.forClass(OrganizationCapabilityEntity.class);
+
+        verify(organizationCapabilityRepository)
+                .save(capabilityCaptor.capture());
+
+        assertEquals(
+                OrganizationCapability.SUPPLIER,
+                capabilityCaptor.getValue().getCapability()
+        );
+
+        assertEquals(
+                20L,
+                capabilityCaptor.getValue().getOrganization().getId()
+        );
+
+        // Verify capability audit persistence
+        ArgumentCaptor<OrganizationCapabilityAudit> auditCaptor =
+                ArgumentCaptor.forClass(OrganizationCapabilityAudit.class);
+
+        verify(organizationCapabilityAuditRepository)
+                .save(auditCaptor.capture());
+
+        OrganizationCapabilityAudit audit = auditCaptor.getValue();
+
+        assertEquals(OrganizationCapability.SUPPLIER, audit.getCapability());
+        assertEquals(OrganizationCapabilityAction.ENABLED, audit.getAction());
+        assertEquals(supplier, audit.getChangedBy());
+        assertEquals("Organization onboarding", audit.getReason());
+
+        // Verify active OWNER membership
+        ArgumentCaptor<OrganizationMembership> membershipCaptor =
+                ArgumentCaptor.forClass(OrganizationMembership.class);
+
+        verify(organizationMembershipRepository)
+                .save(membershipCaptor.capture());
+
+        OrganizationMembership membership = membershipCaptor.getValue();
+
+        assertEquals(supplier, membership.getUser());
+        assertEquals(20L, membership.getOrganization().getId());
+        assertEquals(MembershipRole.OWNER, membership.getMembershipRole());
+        assertEquals(MembershipStatus.ACTIVE, membership.getStatus());
+        assertNotNull(membership.getJoinedAt());
+
+        // Verify legacy association
         verify(userRepository).save(supplier);
+    }
+
+    @Test
+    void onboardOrganization_shouldOnboardOrganizationWithBuyerAndSupplierCapabilities() {
+        authenticate(buyer);
+
+        when(organizationRepository.existsByBusinessEmail(
+                "retail@example.com"
+        )).thenReturn(false);
+
+        when(organizationRepository.save(any(Organization.class)))
+                .thenAnswer(invocation -> {
+                    Organization organization = invocation.getArgument(0);
+                    setOrganizationId(organization, 30L);
+                    return organization;
+                });
+
+        when(userRepository.save(any(User.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        OrganizationOnboardResponse result =
+                organizationService.onboardOrganization(
+                        validOnboardRequest(
+                                OrganizationCapability.BUYER,
+                                OrganizationCapability.SUPPLIER
+                        ),
+                        buyer.getEmail()
+                );
+
+        assertEquals(30L, result.organizationId());
+        assertEquals("TradeFlow Retailers", result.organizationName());
+        assertNotNull(buyer.getOrganization());
+
+        // Verify both organization capabilities
+        ArgumentCaptor<OrganizationCapabilityEntity> capabilityCaptor =
+                ArgumentCaptor.forClass(OrganizationCapabilityEntity.class);
+
+        verify(organizationCapabilityRepository, times(2))
+                .save(capabilityCaptor.capture());
+
+        assertEquals(2, capabilityCaptor.getAllValues().size());
+
+        assertTrue(capabilityCaptor.getAllValues().stream()
+                .anyMatch(capability ->
+                        capability.getCapability() == OrganizationCapability.BUYER
+                ));
+
+        assertTrue(capabilityCaptor.getAllValues().stream()
+                .anyMatch(capability ->
+                        capability.getCapability() == OrganizationCapability.SUPPLIER
+                ));
+
+        // Verify both capability audit records
+        ArgumentCaptor<OrganizationCapabilityAudit> auditCaptor =
+                ArgumentCaptor.forClass(OrganizationCapabilityAudit.class);
+
+        verify(organizationCapabilityAuditRepository, times(2))
+                .save(auditCaptor.capture());
+
+        assertEquals(2, auditCaptor.getAllValues().size());
+
+        assertTrue(auditCaptor.getAllValues().stream()
+                .allMatch(audit ->
+                        audit.getAction() == OrganizationCapabilityAction.ENABLED
+                                && audit.getChangedBy().equals(buyer)
+                                && "Organization onboarding".equals(audit.getReason())
+                ));
+
+        // Verify active OWNER membership
+        ArgumentCaptor<OrganizationMembership> membershipCaptor =
+                ArgumentCaptor.forClass(OrganizationMembership.class);
+
+        verify(organizationMembershipRepository)
+                .save(membershipCaptor.capture());
+
+        OrganizationMembership membership = membershipCaptor.getValue();
+
+        assertEquals(buyer, membership.getUser());
+        assertEquals(30L, membership.getOrganization().getId());
+        assertEquals(MembershipRole.OWNER, membership.getMembershipRole());
+        assertEquals(MembershipStatus.ACTIVE, membership.getStatus());
+        assertNotNull(membership.getJoinedAt());
+
+        // Verify legacy association
+        verify(userRepository).save(buyer);
     }
 
     @Test

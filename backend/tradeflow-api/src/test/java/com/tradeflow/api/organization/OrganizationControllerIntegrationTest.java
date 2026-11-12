@@ -105,6 +105,26 @@ class OrganizationControllerIntegrationTest {
                 """.formatted(name, email);
     }
 
+    private String onboardingRequest(
+            String name,
+            String email,
+            String... capabilities
+    ) {
+        String capabilitiesJson = java.util.Arrays.stream(capabilities)
+                .map(capability -> "\"" + capability + "\"")
+                .collect(java.util.stream.Collectors.joining(", "));
+
+        return """
+            {
+                "name": "%s",
+                "businessEmail": "%s",
+                "phone": "9876543210",
+                "address": "Pune, Maharashtra",
+                "capabilities": [%s]
+            }
+            """.formatted(name, email, capabilitiesJson);
+    }
+
     // --------------------------------------------------
     // ORGANIZATION ONBOARDING
     // --------------------------------------------------
@@ -129,9 +149,10 @@ class OrganizationControllerIntegrationTest {
                                 "Bearer " + buyerToken()
                         )
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(organizationRequest(
+                        .content(onboardingRequest(
                                 "Test Buyer Organization",
-                                "buyer-business@example.com"
+                                "buyer-business@example.com",
+                                "BUYER"
                         )))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.message")
@@ -161,9 +182,10 @@ class OrganizationControllerIntegrationTest {
                                 "Bearer " + supplierToken()
                         )
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(organizationRequest(
+                        .content(onboardingRequest(
                                 "Test Supplier Organization",
-                                "supplier-business@example.com"
+                                "supplier-business@example.com",
+                                "SUPPLIER"
                         )))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.organizationId").value(2))
@@ -180,9 +202,10 @@ class OrganizationControllerIntegrationTest {
                                 "Bearer " + adminToken()
                         )
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(organizationRequest(
+                        .content(onboardingRequest(
                                 "Admin Organization",
-                                "admin-business@example.com"
+                                "admin-business@example.com",
+                                "BUYER"
                         )))
                 .andExpect(status().isForbidden());
     }
@@ -193,9 +216,10 @@ class OrganizationControllerIntegrationTest {
 
         mockMvc.perform(post(BASE_URL + "/onboard")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(organizationRequest(
-                                "Test Organization",
-                                "business@example.com"
+                        .content(onboardingRequest(
+                                "Admin Organization",
+                                "admin-business@example.com",
+                                "BUYER"
                         )))
                 .andExpect(status().isUnauthorized());
     }
@@ -227,9 +251,10 @@ class OrganizationControllerIntegrationTest {
                                 "Bearer " + buyerToken()
                         )
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(organizationRequest(
+                        .content(onboardingRequest(
                                 "Test Organization",
-                                "invalid-email"
+                                "invalid-email",
+                                "BUYER"
                         )))
                 .andExpect(status().isBadRequest());
     }
@@ -246,9 +271,10 @@ class OrganizationControllerIntegrationTest {
                                 "Bearer " + buyerToken()
                         )
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(organizationRequest(
+                        .content(onboardingRequest(
                                 longName,
-                                "business@example.com"
+                                "business@example.com",
+                                "BUYER"
                         )))
                 .andExpect(status().isBadRequest());
     }

@@ -2,7 +2,10 @@ package com.tradeflow.api.organization;
 
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.Size;
+
+import java.util.Set;
 
 public record OrganizationOnboardRequest(
 
@@ -19,6 +22,9 @@ public record OrganizationOnboardRequest(
         String phone,
 
         @Size(max = 500, message = "Address cannot exceed 500 characters")
-        String address
+        String address,
+
+        @NotEmpty(message = "Select at least one organization capability")
+        Set<OrganizationCapability> capabilities
 
 ) {}
