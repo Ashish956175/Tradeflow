@@ -1,7 +1,12 @@
 package com.tradeflow.api.supplier;
 
+import com.tradeflow.api.membership.OrganizationMembership;
 import com.tradeflow.api.organization.Organization;
+import com.tradeflow.api.organization.OrganizationCapability;
 import com.tradeflow.api.organization.OrganizationRepository;
+import com.tradeflow.api.security.MembershipAuthorizationService;
+import com.tradeflow.api.user.User;
+import com.tradeflow.api.user.UserRole;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -16,32 +21,50 @@ public class SupplierService {
 
     private final SupplierRepository supplierRepository;
     private final OrganizationRepository organizationRepository;
+    private final MembershipAuthorizationService membershipAuthorizationService;
 
     public SupplierService(
             SupplierRepository supplierRepository,
-            OrganizationRepository organizationRepository) {
+            OrganizationRepository organizationRepository,
+            MembershipAuthorizationService membershipAuthorizationService
+    ) {
         this.supplierRepository = supplierRepository;
         this.organizationRepository = organizationRepository;
+        this.membershipAuthorizationService = membershipAuthorizationService;
     }
 
     @Transactional
-    public Supplier createSupplier(SupplierRequest request) {
+    public Supplier createSupplier(
+            SupplierRequest request,
+            String email,
+            Long organizationId
+    ) {
 
-        Long organizationId = request.organizationId();
+        User user = membershipAuthorizationService.getAuthenticatedUser(email);
 
-        Organization organization = organizationRepository
-                .findById(organizationId)
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.NOT_FOUND,
-                        "Organization not found"
-                ));
+        if (user.getRole() == UserRole.ADMIN) {
+            throw new ResponseStatusException(
+                    HttpStatus.FORBIDDEN,
+                    "Platform administrators cannot create supplier profiles"
+            );
+        }
+
+        OrganizationMembership membership =
+                membershipAuthorizationService.requireOrganizationCapability(
+                        email,
+                        organizationId,
+                        OrganizationCapability.SUPPLIER
+                );
+
+        Organization organization = membership.getOrganization();
 
         String normalizedEmail = request.email()
                 .trim()
                 .toLowerCase();
 
         if (supplierRepository.existsByOrganization_IdAndEmail(
-                organizationId, normalizedEmail)) {
+                organization.getId(),
+                normalizedEmail)) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
                     "A supplier with this email already exists in this organization"
@@ -58,7 +81,20 @@ public class SupplierService {
         return supplierRepository.save(supplier);
     }
 
-    public List<Supplier> getSuppliersByOrganization(Long organizationId) {
+    public List<Supplier> getSuppliersByOrganization(
+            Long organizationId,
+            String email
+    ) {
+
+        User user = membershipAuthorizationService.getAuthenticatedUser(email);
+
+        if (user.getRole() != UserRole.ADMIN) {
+            membershipAuthorizationService.requireOrganizationCapability(
+                    email,
+                    organizationId,
+                    OrganizationCapability.SUPPLIER
+            );
+        }
 
         if (!organizationRepository.existsById(organizationId)) {
             throw new ResponseStatusException(
@@ -70,12 +106,25 @@ public class SupplierService {
         return supplierRepository.findAllByOrganization_Id(organizationId);
     }
 
-    public Supplier getSupplierById(Long id) {
-        return supplierRepository.findById(id)
+    public Supplier getSupplierById(Long id, String email) {
+
+        User user = membershipAuthorizationService.getAuthenticatedUser(email);
+
+        Supplier supplier = supplierRepository.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND,
                         "Supplier not found"
                 ));
+
+        if (user.getRole() != UserRole.ADMIN) {
+            membershipAuthorizationService.requireOrganizationCapability(
+                    email,
+                    supplier.getOrganization().getId(),
+                    OrganizationCapability.SUPPLIER
+            );
+        }
+
+        return supplier;
     }
 
     private String normalizeOptional(String value) {
