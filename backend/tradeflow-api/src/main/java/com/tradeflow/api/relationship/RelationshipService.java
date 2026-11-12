@@ -1,11 +1,14 @@
 package com.tradeflow.api.relationship;
 
+import com.tradeflow.api.membership.OrganizationMembership;
 import com.tradeflow.api.organization.Organization;
+import com.tradeflow.api.organization.OrganizationCapability;
+import com.tradeflow.api.organization.OrganizationCapabilityRepository;
 import com.tradeflow.api.organization.OrganizationRepository;
+import com.tradeflow.api.security.MembershipAuthorizationService;
 import com.tradeflow.api.supplier.Supplier;
 import com.tradeflow.api.supplier.SupplierRepository;
 import com.tradeflow.api.user.User;
-import com.tradeflow.api.user.UserRepository;
 import com.tradeflow.api.user.UserRole;
 
 import org.springframework.http.HttpStatus;
@@ -14,7 +17,6 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
-import java.util.Locale;
 
 @Service
 @Transactional(readOnly = true)
@@ -23,35 +25,49 @@ public class RelationshipService {
     private final BuyerSupplierRelationshipRepository relationshipRepository;
     private final OrganizationRepository organizationRepository;
     private final SupplierRepository supplierRepository;
-    private final UserRepository userRepository;
+    private final OrganizationCapabilityRepository organizationCapabilityRepository;
+    private final MembershipAuthorizationService authorizationService;
 
     public RelationshipService(
             BuyerSupplierRelationshipRepository relationshipRepository,
             OrganizationRepository organizationRepository,
             SupplierRepository supplierRepository,
-            UserRepository userRepository
+            OrganizationCapabilityRepository organizationCapabilityRepository,
+            MembershipAuthorizationService authorizationService
     ) {
         this.relationshipRepository = relationshipRepository;
         this.organizationRepository = organizationRepository;
         this.supplierRepository = supplierRepository;
-        this.userRepository = userRepository;
+        this.organizationCapabilityRepository = organizationCapabilityRepository;
+        this.authorizationService = authorizationService;
     }
 
     /**
-     * A buyer can request a relationship with a supplier.
-     * The buyer organization is taken from the authenticated user,
-     * never trusted from the request body.
+     * A buyer member can request a relationship with a supplier.
+     * The buyer organization comes from the active membership,
+     * not from the request body.
      */
     @Transactional
     public BuyerSupplierRelationship createRelationship(
             RelationshipRequest request,
-            String authenticatedEmail
+            String authenticatedEmail,
+            Long organizationId
     ) {
 
-        User user = getAuthenticatedUser(authenticatedEmail);
-        requireRole(user, UserRole.BUYER);
+        User user = authorizationService.getAuthenticatedUser(
+                authenticatedEmail
+        );
 
-        Organization buyer = requireOrganization(user);
+        rejectPlatformAdminWrite(user);
+
+        OrganizationMembership membership =
+                authorizationService.requireOrganizationCapability(
+                        authenticatedEmail,
+                        organizationId,
+                        OrganizationCapability.BUYER
+                );
+
+        Organization buyerOrganization = membership.getOrganization();
 
         Supplier supplier = supplierRepository
                 .findById(request.supplierId())
@@ -60,21 +76,43 @@ public class RelationshipService {
                         "Supplier not found"
                 ));
 
-        if (supplier.getOrganization() == null
-                || supplier.getOrganization().getId().equals(buyer.getId())) {
+        Organization supplierOrganization = supplier.getOrganization();
 
+        if (supplierOrganization == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Supplier is not associated with an organization"
+            );
+        }
+
+        if (buyerOrganization.getId().equals(
+                supplierOrganization.getId()
+        )) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
                     "You cannot create a buyer relationship with your own organization"
             );
         }
 
+        boolean supplierCapabilityEnabled =
+                organizationCapabilityRepository
+                        .existsByOrganizationIdAndCapability(
+                                supplierOrganization.getId(),
+                                OrganizationCapability.SUPPLIER
+                        );
+
+        if (!supplierCapabilityEnabled) {
+            throw new ResponseStatusException(
+                    HttpStatus.FORBIDDEN,
+                    "The supplier organization does not have SUPPLIER capability enabled"
+            );
+        }
+
         if (relationshipRepository
                 .existsByBuyerOrganization_IdAndSupplier_Id(
-                        buyer.getId(),
+                        buyerOrganization.getId(),
                         supplier.getId()
                 )) {
-
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
                     "This buyer-supplier relationship already exists"
@@ -84,7 +122,7 @@ public class RelationshipService {
         BuyerSupplierRelationship relationship =
                 new BuyerSupplierRelationship();
 
-        relationship.setBuyerOrganization(buyer);
+        relationship.setBuyerOrganization(buyerOrganization);
         relationship.setSupplier(supplier);
         relationship.setStatus(RelationshipStatus.PENDING);
 
@@ -92,15 +130,17 @@ public class RelationshipService {
     }
 
     /**
-     * Buyers can view their own organization's relationships.
-     * Administrators can view relationships for any buyer organization.
+     * Platform administrators can view all buyer relationships.
+     * Other users need BUYER capability in the requested organization.
      */
     public List<BuyerSupplierRelationship> getBuyerRelationships(
             Long buyerOrganizationId,
             String authenticatedEmail
     ) {
 
-        User user = getAuthenticatedUser(authenticatedEmail);
+        User user = authorizationService.getAuthenticatedUser(
+                authenticatedEmail
+        );
 
         Organization requestedOrganization = organizationRepository
                 .findById(buyerOrganizationId)
@@ -109,18 +149,12 @@ public class RelationshipService {
                         "Buyer organization not found"
                 ));
 
-        if (user.getRole() != UserRole.ADMIN) {
-            Organization ownOrganization = requireOrganization(user);
-
-            if (user.getRole() != UserRole.BUYER
-                    || !ownOrganization.getId()
-                    .equals(requestedOrganization.getId())) {
-
-                throw new ResponseStatusException(
-                        HttpStatus.FORBIDDEN,
-                        "You are not authorized to view these relationships"
-                );
-            }
+        if (!isPlatformAdmin(user)) {
+            authorizationService.requireOrganizationCapability(
+                    authenticatedEmail,
+                    requestedOrganization.getId(),
+                    OrganizationCapability.BUYER
+            );
         }
 
         return relationshipRepository
@@ -128,15 +162,17 @@ public class RelationshipService {
     }
 
     /**
-     * A supplier can view relationships involving its own supplier profile.
-     * Administrators can view relationships for any supplier profile.
+     * Platform administrators can view all supplier relationships.
+     * Other users need SUPPLIER capability in the supplier's organization.
      */
     public List<BuyerSupplierRelationship> getSupplierRelationships(
             Long supplierId,
             String authenticatedEmail
     ) {
 
-        User user = getAuthenticatedUser(authenticatedEmail);
+        User user = authorizationService.getAuthenticatedUser(
+                authenticatedEmail
+        );
 
         Supplier supplier = supplierRepository
                 .findById(supplierId)
@@ -145,27 +181,30 @@ public class RelationshipService {
                         "Supplier not found"
                 ));
 
-        if (user.getRole() != UserRole.ADMIN) {
-            Organization ownOrganization = requireOrganization(user);
+        if (!isPlatformAdmin(user)) {
+            Organization supplierOrganization =
+                    supplier.getOrganization();
 
-            if (user.getRole() != UserRole.SUPPLIER
-                    || supplier.getOrganization() == null
-                    || !ownOrganization.getId()
-                    .equals(supplier.getOrganization().getId())) {
-
+            if (supplierOrganization == null) {
                 throw new ResponseStatusException(
                         HttpStatus.FORBIDDEN,
-                        "You are not authorized to view these relationships"
+                        "Supplier is not associated with an organization"
                 );
             }
+
+            authorizationService.requireOrganizationCapability(
+                    authenticatedEmail,
+                    supplierOrganization.getId(),
+                    OrganizationCapability.SUPPLIER
+            );
         }
 
         return relationshipRepository.findAllBySupplier_Id(supplierId);
     }
 
     /**
-     * A supplier can approve a pending relationship request.
-     * Administrators can also approve it.
+     * Only authorized supplier organization members can approve.
+     * Platform administrators have read-only access.
      */
     @Transactional
     public BuyerSupplierRelationship approveRelationship(
@@ -173,11 +212,15 @@ public class RelationshipService {
             String authenticatedEmail
     ) {
 
-        User user = getAuthenticatedUser(authenticatedEmail);
+        User user = authorizationService.getAuthenticatedUser(
+                authenticatedEmail
+        );
+
+        rejectPlatformAdminWrite(user);
 
         BuyerSupplierRelationship relationship = getRelationship(id);
 
-        verifySupplierOrAdminAccess(user, relationship);
+        requireSupplierCapability(authenticatedEmail, relationship);
 
         if (relationship.getStatus() != RelationshipStatus.PENDING) {
             throw new ResponseStatusException(
@@ -192,8 +235,8 @@ public class RelationshipService {
     }
 
     /**
-     * A supplier can reject a pending relationship request.
-     * Administrators can also reject it.
+     * Only authorized supplier organization members can reject.
+     * Platform administrators have read-only access.
      */
     @Transactional
     public BuyerSupplierRelationship rejectRelationship(
@@ -201,11 +244,15 @@ public class RelationshipService {
             String authenticatedEmail
     ) {
 
-        User user = getAuthenticatedUser(authenticatedEmail);
+        User user = authorizationService.getAuthenticatedUser(
+                authenticatedEmail
+        );
+
+        rejectPlatformAdminWrite(user);
 
         BuyerSupplierRelationship relationship = getRelationship(id);
 
-        verifySupplierOrAdminAccess(user, relationship);
+        requireSupplierCapability(authenticatedEmail, relationship);
 
         if (relationship.getStatus() != RelationshipStatus.PENDING) {
             throw new ResponseStatusException(
@@ -219,6 +266,27 @@ public class RelationshipService {
         return relationshipRepository.save(relationship);
     }
 
+    private void requireSupplierCapability(
+            String authenticatedEmail,
+            BuyerSupplierRelationship relationship
+    ) {
+
+        Supplier supplier = relationship.getSupplier();
+
+        if (supplier == null || supplier.getOrganization() == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.FORBIDDEN,
+                    "The supplier is not associated with an organization"
+            );
+        }
+
+        authorizationService.requireOrganizationCapability(
+                authenticatedEmail,
+                supplier.getOrganization().getId(),
+                OrganizationCapability.SUPPLIER
+        );
+    }
+
     private BuyerSupplierRelationship getRelationship(Long id) {
 
         return relationshipRepository.findById(id)
@@ -228,78 +296,16 @@ public class RelationshipService {
                 ));
     }
 
-    private void verifySupplierOrAdminAccess(
-            User user,
-            BuyerSupplierRelationship relationship
-    ) {
-
-        if (user.getRole() == UserRole.ADMIN) {
-            return;
-        }
-
-        if (user.getRole() != UserRole.SUPPLIER) {
-            throw new ResponseStatusException(
-                    HttpStatus.FORBIDDEN,
-                    "Only the associated supplier or an administrator can change relationship status"
-            );
-        }
-
-        Organization organization = requireOrganization(user);
-
-        if (relationship.getSupplier().getOrganization() == null
-                || !organization.getId().equals(
-                relationship.getSupplier().getOrganization().getId()
-        )) {
-
-            throw new ResponseStatusException(
-                    HttpStatus.FORBIDDEN,
-                    "You cannot change a relationship belonging to another supplier"
-            );
-        }
+    private boolean isPlatformAdmin(User user) {
+        return user.getRole() == UserRole.ADMIN;
     }
 
-    private User getAuthenticatedUser(String authenticatedEmail) {
+    private void rejectPlatformAdminWrite(User user) {
 
-        String normalizedEmail = authenticatedEmail
-                .trim()
-                .toLowerCase(Locale.ROOT);
-
-        User user = userRepository.findByEmail(normalizedEmail)
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.UNAUTHORIZED,
-                        "Authenticated user was not found"
-                ));
-
-        if (!user.isEnabled()) {
+        if (isPlatformAdmin(user)) {
             throw new ResponseStatusException(
                     HttpStatus.FORBIDDEN,
-                    "Your account is disabled"
-            );
-        }
-
-        return user;
-    }
-
-    private Organization requireOrganization(User user) {
-
-        Organization organization = user.getOrganization();
-
-        if (organization == null) {
-            throw new ResponseStatusException(
-                    HttpStatus.FORBIDDEN,
-                    "Your account is not associated with an organization"
-            );
-        }
-
-        return organization;
-    }
-
-    private void requireRole(User user, UserRole expectedRole) {
-
-        if (user.getRole() != expectedRole) {
-            throw new ResponseStatusException(
-                    HttpStatus.FORBIDDEN,
-                    "Your account does not have permission to perform this operation"
+                    "Platform administrators have read-only access to relationships"
             );
         }
     }

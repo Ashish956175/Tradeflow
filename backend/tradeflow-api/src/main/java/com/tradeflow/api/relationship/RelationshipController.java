@@ -31,11 +31,13 @@ public class RelationshipController {
     @ResponseStatus(HttpStatus.CREATED)
     public BuyerSupplierRelationship createRelationship(
             @Valid @RequestBody RelationshipRequest request,
+            @RequestHeader("X-Organization-Id") @Positive Long organizationId,
             @AuthenticationPrincipal Jwt jwt
     ) {
         return relationshipService.createRelationship(
                 request,
-                jwt.getSubject()
+                jwt.getSubject(),
+                organizationId
         );
     }
 

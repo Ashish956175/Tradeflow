@@ -20,6 +20,9 @@ import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
+
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 
@@ -103,11 +106,13 @@ class RelationshipControllerIntegrationTest {
 
         when(relationshipService.createRelationship(
                 any(RelationshipRequest.class),
-                eq("buyer@example.com")
+                eq("buyer@example.com"),
+                eq(10L)
         )).thenReturn(null);
 
         mockMvc.perform(post(BASE_URL)
                         .header("Authorization", "Bearer " + buyerToken())
+                        .header("X-Organization-Id", 10L)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {
@@ -118,7 +123,8 @@ class RelationshipControllerIntegrationTest {
 
         verify(relationshipService).createRelationship(
                 any(RelationshipRequest.class),
-                eq("buyer@example.com")
+                eq("buyer@example.com"),
+                eq(10L)
         );
     }
 
@@ -137,38 +143,67 @@ class RelationshipControllerIntegrationTest {
     }
 
     @Test
-    void supplierCannotCreateRelationship() throws Exception {
+    void authenticatedSupplierRoleCanReachCreateController() throws Exception {
+
+        when(relationshipService.createRelationship(
+                any(RelationshipRequest.class),
+                eq("supplier@example.com"),
+                eq(10L)
+        )).thenReturn(null);
 
         mockMvc.perform(post(BASE_URL)
                         .header("Authorization", "Bearer " + supplierToken())
+                        .header("X-Organization-Id", 10L)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {
-                                    "supplierId": 30
-                                }
-                                """))
-                .andExpect(status().isForbidden());
+                            {
+                                "supplierId": 30
+                            }
+                            """))
+                .andExpect(status().isCreated());
+
+        verify(relationshipService).createRelationship(
+                any(RelationshipRequest.class),
+                eq("supplier@example.com"),
+                eq(10L)
+        );
     }
 
     @Test
     void adminCannotCreateRelationship() throws Exception {
 
+        when(relationshipService.createRelationship(
+                any(RelationshipRequest.class),
+                eq("admin@example.com"),
+                eq(10L)
+        )).thenThrow(new ResponseStatusException(
+                HttpStatus.FORBIDDEN,
+                "Platform administrators cannot create relationships"
+        ));
+
         mockMvc.perform(post(BASE_URL)
                         .header("Authorization", "Bearer " + adminToken())
+                        .header("X-Organization-Id", 10L)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {
-                                    "supplierId": 30
-                                }
-                                """))
+                            {
+                                "supplierId": 30
+                            }
+                            """))
                 .andExpect(status().isForbidden());
-    }
 
+        verify(relationshipService).createRelationship(
+                any(RelationshipRequest.class),
+                eq("admin@example.com"),
+                eq(10L)
+        );
+    }
     @Test
     void createRelationshipRejectsMissingSupplierId() throws Exception {
 
         mockMvc.perform(post(BASE_URL)
                         .header("Authorization", "Bearer " + buyerToken())
+                        .header("X-Organization-Id", 10L)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"))
                 .andExpect(status().isBadRequest());
@@ -179,6 +214,7 @@ class RelationshipControllerIntegrationTest {
 
         mockMvc.perform(post(BASE_URL)
                         .header("Authorization", "Bearer " + buyerToken())
+                        .header("X-Organization-Id", 10L)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {
@@ -271,6 +307,13 @@ class RelationshipControllerIntegrationTest {
     @Test
     void buyerCannotApproveRelationship() throws Exception {
 
+        when(relationshipService.approveRelationship(
+                1L,
+                "buyer@example.com"
+        )).thenThrow(new ResponseStatusException(
+                HttpStatus.FORBIDDEN
+        ));
+
         mockMvc.perform(patch(BASE_URL + "/1/approve")
                         .header("Authorization", "Bearer " + buyerToken()))
                 .andExpect(status().isForbidden());
@@ -284,16 +327,18 @@ class RelationshipControllerIntegrationTest {
     }
 
     @Test
-    void adminCanApproveRelationship() throws Exception {
+    void adminCannotApproveRelationship() throws Exception {
 
         when(relationshipService.approveRelationship(
                 1L,
                 "admin@example.com"
-        )).thenReturn(null);
+        )).thenThrow(new ResponseStatusException(
+                HttpStatus.FORBIDDEN
+        ));
 
         mockMvc.perform(patch(BASE_URL + "/1/approve")
                         .header("Authorization", "Bearer " + adminToken()))
-                .andExpect(status().isOk());
+                .andExpect(status().isForbidden());
     }
 
     // --------------------------------------------------
@@ -321,11 +366,17 @@ class RelationshipControllerIntegrationTest {
     @Test
     void buyerCannotRejectRelationship() throws Exception {
 
+        when(relationshipService.rejectRelationship(
+                1L,
+                "buyer@example.com"
+        )).thenThrow(new ResponseStatusException(
+                HttpStatus.FORBIDDEN
+        ));
+
         mockMvc.perform(patch(BASE_URL + "/1/reject")
                         .header("Authorization", "Bearer " + buyerToken()))
                 .andExpect(status().isForbidden());
     }
-
     // --------------------------------------------------
     // PATH VARIABLE VALIDATION
     // --------------------------------------------------
@@ -352,6 +403,36 @@ class RelationshipControllerIntegrationTest {
                                 "Bearer " + buyerToken()
                         )
         ).andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void createRelationshipWithoutOrganizationHeaderReturnsBadRequest()
+            throws Exception {
+
+        mockMvc.perform(post(BASE_URL)
+                        .header("Authorization", "Bearer " + buyerToken())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                            {
+                                "supplierId": 30
+                            }
+                            """))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void adminCannotRejectRelationship() throws Exception {
+
+        when(relationshipService.rejectRelationship(
+                1L,
+                "admin@example.com"
+        )).thenThrow(new ResponseStatusException(
+                HttpStatus.FORBIDDEN
+        ));
+
+        mockMvc.perform(patch(BASE_URL + "/1/reject")
+                        .header("Authorization", "Bearer " + adminToken()))
+                .andExpect(status().isForbidden());
     }
 
 

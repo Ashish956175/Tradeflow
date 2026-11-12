@@ -114,7 +114,7 @@ public class SecurityConfig {
                         .requestMatchers(
                                 HttpMethod.POST,
                                 "/api/v1/relationships"
-                        ).hasRole("BUYER")
+                        ).authenticated()
 
                         // View buyer-supplier relationships
                         // Ownership is checked in RelationshipService
@@ -128,7 +128,7 @@ public class SecurityConfig {
                                 HttpMethod.PATCH,
                                 "/api/v1/relationships/*/approve",
                                 "/api/v1/relationships/*/reject"
-                        ).hasAnyRole("SUPPLIER", "ADMIN")
+                        ).authenticated()
 
                         // Procurement request creation
                         .requestMatchers(
