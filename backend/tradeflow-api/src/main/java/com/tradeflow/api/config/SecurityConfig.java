@@ -134,14 +134,14 @@ public class SecurityConfig {
                         .requestMatchers(
                                 HttpMethod.POST,
                                 "/api/v1/procurement-requests"
-                        ).hasRole("BUYER")
+                        ).authenticated()
 
                         // Procurement request reads
                         .requestMatchers(
                                 HttpMethod.GET,
                                 "/api/v1/procurement-requests",
                                 "/api/v1/procurement-requests/**"
-                        ).hasAnyRole("BUYER", "ADMIN")
+                        ).authenticated()
 
                         // Submit a quotation
                         .requestMatchers(

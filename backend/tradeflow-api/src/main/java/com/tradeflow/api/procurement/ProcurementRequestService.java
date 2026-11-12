@@ -1,10 +1,11 @@
 package com.tradeflow.api.procurement;
 
-import com.tradeflow.api.organization.Organization;
+import com.tradeflow.api.membership.OrganizationMembership;
+import com.tradeflow.api.organization.OrganizationCapability;
 import com.tradeflow.api.product.Product;
 import com.tradeflow.api.product.ProductRepository;
+import com.tradeflow.api.security.MembershipAuthorizationService;
 import com.tradeflow.api.user.User;
-import com.tradeflow.api.user.UserRepository;
 import com.tradeflow.api.user.UserRole;
 
 import org.springframework.http.HttpStatus;
@@ -13,47 +14,36 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
-import java.util.Locale;
 
 @Service
 public class ProcurementRequestService {
 
     private final ProcurementRequestRepository procurementRequestRepository;
     private final ProductRepository productRepository;
-    private final UserRepository userRepository;
+    private final MembershipAuthorizationService authorizationService;
 
     public ProcurementRequestService(
             ProcurementRequestRepository procurementRequestRepository,
             ProductRepository productRepository,
-            UserRepository userRepository
+            MembershipAuthorizationService authorizationService
     ) {
         this.procurementRequestRepository = procurementRequestRepository;
         this.productRepository = productRepository;
-        this.userRepository = userRepository;
+        this.authorizationService = authorizationService;
     }
 
     @Transactional
     public ProcurementRequest createProcurementRequest(
             ProcurementRequestRequest request,
-            String authenticatedEmail
+            String authenticatedEmail,
+            Long organizationId
     ) {
-        User user = getAuthenticatedUser(authenticatedEmail);
-
-        if (user.getRole() != UserRole.BUYER) {
-            throw new ResponseStatusException(
-                    HttpStatus.FORBIDDEN,
-                    "Only buyers can create procurement requests"
-            );
-        }
-
-        Organization buyerOrganization = user.getOrganization();
-
-        if (buyerOrganization == null) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "Your account must be associated with an organization first"
-            );
-        }
+        OrganizationMembership membership =
+                authorizationService.requireOrganizationCapability(
+                        authenticatedEmail,
+                        organizationId,
+                        OrganizationCapability.BUYER
+                );
 
         Product product = productRepository
                 .findById(request.productId())
@@ -63,7 +53,7 @@ public class ProcurementRequestService {
                 ));
 
         ProcurementRequest procurementRequest = new ProcurementRequest(
-                buyerOrganization,
+                membership.getOrganization(),
                 product,
                 request.requestedQuantity(),
                 request.targetUnitPrice(),
@@ -76,28 +66,20 @@ public class ProcurementRequestService {
 
     @Transactional(readOnly = true)
     public List<ProcurementRequest> getMyProcurementRequests(
-            String authenticatedEmail
+            String authenticatedEmail,
+            Long organizationId
     ) {
-        User user = getAuthenticatedUser(authenticatedEmail);
-
-        if (user.getRole() != UserRole.BUYER) {
-            throw new ResponseStatusException(
-                    HttpStatus.FORBIDDEN,
-                    "Only buyers can access their procurement requests"
-            );
-        }
-
-        Organization organization = user.getOrganization();
-
-        if (organization == null) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "Your account must be associated with an organization first"
-            );
-        }
+        OrganizationMembership membership =
+                authorizationService.requireOrganizationCapability(
+                        authenticatedEmail,
+                        organizationId,
+                        OrganizationCapability.BUYER
+                );
 
         return procurementRequestRepository
-                .findByBuyerOrganization_Id(organization.getId());
+                .findByBuyerOrganization_Id(
+                        membership.getOrganization().getId()
+                );
     }
 
     @Transactional(readOnly = true)
@@ -105,7 +87,9 @@ public class ProcurementRequestService {
             Long id,
             String authenticatedEmail
     ) {
-        User user = getAuthenticatedUser(authenticatedEmail);
+        User user = authorizationService.getAuthenticatedUser(
+                authenticatedEmail
+        );
 
         ProcurementRequest request = procurementRequestRepository
                 .findById(id)
@@ -118,36 +102,12 @@ public class ProcurementRequestService {
             return request;
         }
 
-        Organization organization = user.getOrganization();
-
-        if (organization == null
-                || !organization.getId().equals(
-                request.getBuyerOrganization().getId())) {
-            throw new ResponseStatusException(
-                    HttpStatus.FORBIDDEN,
-                    "You are not authorized to access this procurement request"
-            );
-        }
+        authorizationService.requireOrganizationCapability(
+                authenticatedEmail,
+                request.getBuyerOrganization().getId(),
+                OrganizationCapability.BUYER
+        );
 
         return request;
-    }
-
-    private User getAuthenticatedUser(String email) {
-        String normalizedEmail = email.trim().toLowerCase(Locale.ROOT);
-
-        User user = userRepository.findByEmail(normalizedEmail)
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.UNAUTHORIZED,
-                        "Authenticated user was not found"
-                ));
-
-        if (!user.isEnabled()) {
-            throw new ResponseStatusException(
-                    HttpStatus.FORBIDDEN,
-                    "Your account is disabled"
-            );
-        }
-
-        return user;
     }
 }

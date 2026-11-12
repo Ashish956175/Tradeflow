@@ -1,7 +1,6 @@
 package com.tradeflow.api.procurement;
 
 import jakarta.validation.Valid;
-
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -25,20 +24,24 @@ public class ProcurementRequestController {
     @ResponseStatus(HttpStatus.CREATED)
     public ProcurementRequest createProcurementRequest(
             @Valid @RequestBody ProcurementRequestRequest request,
+            @RequestHeader("X-Organization-Id") Long organizationId,
             @AuthenticationPrincipal Jwt jwt
     ) {
         return procurementRequestService.createProcurementRequest(
                 request,
-                jwt.getSubject()
+                jwt.getSubject(),
+                organizationId
         );
     }
 
     @GetMapping
     public List<ProcurementRequest> getMyProcurementRequests(
+            @RequestHeader("X-Organization-Id") Long organizationId,
             @AuthenticationPrincipal Jwt jwt
     ) {
         return procurementRequestService.getMyProcurementRequests(
-                jwt.getSubject()
+                jwt.getSubject(),
+                organizationId
         );
     }
 

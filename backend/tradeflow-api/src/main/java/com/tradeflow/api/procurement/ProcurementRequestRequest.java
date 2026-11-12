@@ -12,10 +12,6 @@ import java.time.LocalDate;
 
 public record ProcurementRequestRequest(
 
-        @NotNull(message = "Buyer organization ID is required")
-        @Positive(message = "Buyer organization ID must be positive")
-        Long buyerOrganizationId,
-
         @NotNull(message = "Product ID is required")
         @Positive(message = "Product ID must be positive")
         Long productId,
