@@ -147,14 +147,14 @@ public class SecurityConfig {
                         .requestMatchers(
                                 HttpMethod.POST,
                                 "/api/v1/quotations"
-                        ).hasRole("SUPPLIER")
+                        ).authenticated()
 
                         // Accept or reject a quotation
                         .requestMatchers(
                                 HttpMethod.PATCH,
                                 "/api/v1/quotations/*/accept",
                                 "/api/v1/quotations/*/reject"
-                        ).hasRole("BUYER")
+                        ).authenticated()
 
                         // Create an order from an accepted quotation
                         .requestMatchers(

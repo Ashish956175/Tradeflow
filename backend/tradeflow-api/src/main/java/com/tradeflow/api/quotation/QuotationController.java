@@ -1,12 +1,13 @@
 package com.tradeflow.api.quotation;
 
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Positive;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
-import jakarta.validation.Valid;
 import java.util.List;
 
 @RestController
@@ -20,35 +21,43 @@ public class QuotationController {
         this.quotationService = quotationService;
     }
 
-    // Submit a quotation as the authenticated supplier
+    // Submit a quotation as an authorized supplier organization
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public Quotation createQuotation(
             @Valid @RequestBody QuotationRequest request,
+            @RequestHeader("X-Organization-Id")
+            @Positive(message = "Organization ID must be positive")
+            Long organizationId,
             @AuthenticationPrincipal Jwt jwt
     ) {
         return quotationService.createQuotation(
                 request,
-                jwt.getSubject()
+                jwt.getSubject(),
+                organizationId
         );
     }
 
     // Get quotations for a procurement request
     @GetMapping("/procurement-request/{procurementRequestId}")
     public List<Quotation> getQuotationsByProcurementRequest(
-            @PathVariable Long procurementRequestId,
+            @PathVariable @Positive Long procurementRequestId,
+            @RequestHeader("X-Organization-Id")
+            @Positive(message = "Organization ID must be positive")
+            Long organizationId,
             @AuthenticationPrincipal Jwt jwt
     ) {
         return quotationService.getQuotationsByProcurementRequest(
                 procurementRequestId,
-                jwt.getSubject()
+                jwt.getSubject(),
+                organizationId
         );
     }
 
     // Get a quotation by ID
     @GetMapping("/{id}")
     public Quotation getQuotationById(
-            @PathVariable Long id,
+            @PathVariable @Positive Long id,
             @AuthenticationPrincipal Jwt jwt
     ) {
         return quotationService.getQuotationById(
@@ -60,7 +69,7 @@ public class QuotationController {
     // Accept a quotation as the owning buyer
     @PatchMapping("/{id}/accept")
     public Quotation acceptQuotation(
-            @PathVariable Long id,
+            @PathVariable @Positive Long id,
             @AuthenticationPrincipal Jwt jwt
     ) {
         return quotationService.acceptQuotation(
@@ -72,7 +81,7 @@ public class QuotationController {
     // Reject a quotation as the owning buyer
     @PatchMapping("/{id}/reject")
     public Quotation rejectQuotation(
-            @PathVariable Long id,
+            @PathVariable @Positive Long id,
             @AuthenticationPrincipal Jwt jwt
     ) {
         return quotationService.rejectQuotation(

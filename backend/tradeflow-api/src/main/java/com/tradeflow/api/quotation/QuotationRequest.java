@@ -15,6 +15,10 @@ public record QuotationRequest(
         @Positive(message = "Procurement request ID must be positive")
         Long procurementRequestId,
 
+        @NotNull(message = "Supplier ID is required")
+        @Positive(message = "Supplier ID must be positive")
+        Long supplierId,
+
         @NotNull(message = "Offered unit price is required")
         @DecimalMin(
                 value = "0.01",
