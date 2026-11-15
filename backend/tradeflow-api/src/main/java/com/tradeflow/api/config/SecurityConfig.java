@@ -160,7 +160,7 @@ public class SecurityConfig {
                         .requestMatchers(
                                 HttpMethod.POST,
                                 "/api/v1/orders/quotation/*"
-                        ).hasRole("BUYER")
+                        ).authenticated()
 
                         // Create a payment
                         .requestMatchers(

@@ -3,7 +3,20 @@ package com.tradeflow.api.order;
 import com.tradeflow.api.inventory.InventoryTransaction;
 import com.tradeflow.api.inventory.InventoryTransactionRepository;
 import com.tradeflow.api.inventory.InventoryTransactionType;
+import com.tradeflow.api.membership.MembershipCapability;
+import com.tradeflow.api.membership.MembershipCapabilityRepository;
+import com.tradeflow.api.membership.MembershipRole;
+import com.tradeflow.api.membership.MembershipStatus;
+import com.tradeflow.api.membership.OrganizationMembership;
+import com.tradeflow.api.membership.OrganizationMembershipRepository;
+import com.tradeflow.api.order.OrderStatus;
+import com.tradeflow.api.order.PurchaseOrder;
+import com.tradeflow.api.order.PurchaseOrderRepository;
+import com.tradeflow.api.order.PurchaseOrderService;
 import com.tradeflow.api.organization.Organization;
+import com.tradeflow.api.organization.OrganizationCapability;
+import com.tradeflow.api.organization.OrganizationCapabilityEntity;
+import com.tradeflow.api.organization.OrganizationCapabilityRepository;
 import com.tradeflow.api.organization.OrganizationRepository;
 import com.tradeflow.api.product.Product;
 import com.tradeflow.api.product.ProductRepository;
@@ -20,11 +33,10 @@ import com.tradeflow.api.user.UserRole;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.support.TransactionTemplate;
-
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.testcontainers.containers.MySQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -32,21 +44,18 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 
-import org.springframework.jdbc.core.JdbcTemplate;
-
-import static org.junit.jupiter.api.Assertions.assertThrows;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @SpringBootTest(properties = {
         "JWT_SECRET=VGhpcy1pcy1hLXRlc3Qtc2VjcmV0LWtleS1mb3ItdHJhZGVmbG93"
 })
 @Testcontainers
 class PurchaseOrderServiceIntegrationTest {
-
-    private static final String ADMIN_EMAIL = "admin@tradeflow.test";
 
     @Container
     static final MySQLContainer<?> mysql =
@@ -100,58 +109,141 @@ class PurchaseOrderServiceIntegrationTest {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
-    private record TestData(Long productId, Long orderId) {
+    @Autowired
+    private OrganizationMembershipRepository membershipRepository;
+
+    @Autowired
+    private MembershipCapabilityRepository membershipCapabilityRepository;
+
+    @Autowired
+    private OrganizationCapabilityRepository organizationCapabilityRepository;
+
+    private record TestData(
+            Long productId,
+            Long orderId,
+            String buyerEmail,
+            String supplierEmail
+    ) {
     }
 
     private TestData createTestData(int availableQuantity) {
         String testId = String.valueOf(System.nanoTime());
+
         return transactionTemplate.execute(status -> {
 
-            User admin = userRepository.findByEmail(ADMIN_EMAIL)
-                    .orElseGet(() -> userRepository.saveAndFlush(
-                            new User(
-                                    "Test Administrator",
-                                    ADMIN_EMAIL,
-                                    "test-password-hash",
-                                    UserRole.ADMIN
-                            )
-                    ));
-
-            userRepository.saveAndFlush(admin);
-
+            // Create buyer organization.
             Organization buyer = new Organization();
             buyer.setName("Test Buyer");
             buyer.setBusinessEmail("buyer-" + testId + "@tradeflow.test");
-
             organizationRepository.saveAndFlush(buyer);
 
+            // Create supplier organization.
             Organization supplierOrganization = new Organization();
             supplierOrganization.setName("Test Supplier Organization");
             supplierOrganization.setBusinessEmail(
                     "supplier-org-" + testId + "@tradeflow.test"
             );
-
-
             organizationRepository.saveAndFlush(supplierOrganization);
 
+            // Enable organization capabilities.
+            organizationCapabilityRepository.saveAndFlush(
+                    new OrganizationCapabilityEntity(
+                            buyer,
+                            OrganizationCapability.BUYER
+                    )
+            );
+
+            organizationCapabilityRepository.saveAndFlush(
+                    new OrganizationCapabilityEntity(
+                            supplierOrganization,
+                            OrganizationCapability.SUPPLIER
+                    )
+            );
+
+            // Create buyer user.
+            String buyerEmail =
+                    "buyer-user-" + testId + "@tradeflow.test";
+
+            User buyerUser = userRepository.saveAndFlush(
+                    new User(
+                            "Test Buyer User",
+                            buyerEmail,
+                            "test-password-hash",
+                            UserRole.BUYER
+                    )
+            );
+
+            // Create supplier user.
+            String supplierEmail =
+                    "supplier-user-" + testId + "@tradeflow.test";
+
+            User supplierUser = userRepository.saveAndFlush(
+                    new User(
+                            "Test Supplier User",
+                            supplierEmail,
+                            "test-password-hash",
+                            UserRole.SUPPLIER
+                    )
+            );
+
+            // Create active buyer membership.
+            OrganizationMembership buyerMembership =
+                    membershipRepository.saveAndFlush(
+                            new OrganizationMembership(
+                                    buyerUser,
+                                    buyer,
+                                    MembershipRole.MEMBER,
+                                    MembershipStatus.ACTIVE,
+                                    LocalDateTime.now()
+                            )
+                    );
+
+            // Assign explicit BUYER capability.
+            membershipCapabilityRepository.saveAndFlush(
+                    new MembershipCapability(
+                            buyerMembership,
+                            OrganizationCapability.BUYER
+                    )
+            );
+
+            // Create active supplier membership.
+            OrganizationMembership supplierMembership =
+                    membershipRepository.saveAndFlush(
+                            new OrganizationMembership(
+                                    supplierUser,
+                                    supplierOrganization,
+                                    MembershipRole.MEMBER,
+                                    MembershipStatus.ACTIVE,
+                                    LocalDateTime.now()
+                            )
+                    );
+
+            // Assign explicit SUPPLIER capability.
+            membershipCapabilityRepository.saveAndFlush(
+                    new MembershipCapability(
+                            supplierMembership,
+                            OrganizationCapability.SUPPLIER
+                    )
+            );
+
+            // Create supplier profile.
             Supplier supplier = new Supplier();
             supplier.setOrganization(supplierOrganization);
             supplier.setName("Test Supplier");
             supplier.setEmail("supplier-" + testId + "@tradeflow.test");
-
-
             supplierRepository.saveAndFlush(supplier);
 
+            // Create product.
             Product product = new Product();
             product.setName("Integration Test Product");
             product.setDescription("Purchase order integration test");
-            product.setSku("TEST-" + System.nanoTime());
+            product.setSku("TEST-" + testId);
             product.setUnitPrice(new BigDecimal("100.00"));
             product.setAvailableQuantity(availableQuantity);
             product.setUnit("PIECE");
-
             productRepository.saveAndFlush(product);
 
+            // Create procurement request.
             ProcurementRequest request = new ProcurementRequest(
                     buyer,
                     product,
@@ -160,9 +252,9 @@ class PurchaseOrderServiceIntegrationTest {
                     "Test delivery address",
                     LocalDate.now().plusDays(30)
             );
-
             procurementRequestRepository.saveAndFlush(request);
 
+            // Create accepted quotation.
             Quotation quotation = new Quotation(
                     request,
                     supplier,
@@ -170,19 +262,22 @@ class PurchaseOrderServiceIntegrationTest {
                     80,
                     LocalDate.now().plusDays(20)
             );
-
             quotation.accept();
-
             quotationRepository.saveAndFlush(quotation);
 
+            // Create purchase order.
             PurchaseOrder order = new PurchaseOrder(
                     quotation,
                     "Test delivery address"
             );
-
             purchaseOrderRepository.saveAndFlush(order);
 
-            return new TestData(product.getId(), order.getId());
+            return new TestData(
+                    product.getId(),
+                    order.getId(),
+                    buyerEmail,
+                    supplierEmail
+            );
         });
     }
 
@@ -194,7 +289,7 @@ class PurchaseOrderServiceIntegrationTest {
         PurchaseOrder confirmedOrder =
                 purchaseOrderService.confirmOrder(
                         data.orderId(),
-                        ADMIN_EMAIL
+                        data.supplierEmail()
                 );
 
         Product updatedProduct = productRepository
@@ -218,13 +313,13 @@ class PurchaseOrderServiceIntegrationTest {
         // Confirm order: inventory 100 -> 20.
         purchaseOrderService.confirmOrder(
                 data.orderId(),
-                ADMIN_EMAIL
+                data.supplierEmail()
         );
 
-        // Ship order: record dispatch without changing available inventory.
+        // Ship order without changing available inventory.
         PurchaseOrder shippedOrder = purchaseOrderService.shipOrder(
                 data.orderId(),
-                ADMIN_EMAIL
+                data.supplierEmail()
         );
 
         Product updatedProduct = productRepository
@@ -257,8 +352,10 @@ class PurchaseOrderServiceIntegrationTest {
         assertEquals(80, shipmentTransaction.getQuantity());
         assertEquals(20, shipmentTransaction.getPreviousQuantity());
         assertEquals(20, shipmentTransaction.getNewQuantity());
-        assertEquals(data.orderId(),
-                shipmentTransaction.getPurchaseOrder().getId());
+        assertEquals(
+                data.orderId(),
+                shipmentTransaction.getPurchaseOrder().getId()
+        );
         assertEquals(
                 InventoryTransactionType.SHIPPED,
                 shipmentTransaction.getTransactionType()
@@ -270,17 +367,17 @@ class PurchaseOrderServiceIntegrationTest {
 
         TestData data = createTestData(100);
 
-        // First confirm the order: inventory 100 -> 20.
+        // Confirm order: inventory 100 -> 20.
         purchaseOrderService.confirmOrder(
                 data.orderId(),
-                ADMIN_EMAIL
+                data.supplierEmail()
         );
 
-        // Cancel the confirmed order: inventory 20 -> 100.
+        // Cancel order as the buyer: inventory 20 -> 100.
         PurchaseOrder cancelledOrder =
                 purchaseOrderService.cancelOrder(
                         data.orderId(),
-                        ADMIN_EMAIL
+                        data.buyerEmail()
                 );
 
         Product updatedProduct = productRepository
@@ -302,11 +399,11 @@ class PurchaseOrderServiceIntegrationTest {
         TestData data = createTestData(50);
 
         org.springframework.web.server.ResponseStatusException exception =
-                org.junit.jupiter.api.Assertions.assertThrows(
+                assertThrows(
                         org.springframework.web.server.ResponseStatusException.class,
                         () -> purchaseOrderService.confirmOrder(
                                 data.orderId(),
-                                ADMIN_EMAIL
+                                data.supplierEmail()
                         )
                 );
 
@@ -328,33 +425,31 @@ class PurchaseOrderServiceIntegrationTest {
 
         TestData data = createTestData(100);
 
-        // Confirm order: inventory decreases from 100 to 20.
+        // Confirm order.
         purchaseOrderService.confirmOrder(
                 data.orderId(),
-                ADMIN_EMAIL
+                data.supplierEmail()
         );
 
-        // Create a trigger that deliberately rejects purchase-order updates.
+        // Reject purchase-order updates deliberately.
         jdbcTemplate.execute("""
-        CREATE TRIGGER test_fail_shipment_order_update
-        BEFORE UPDATE ON purchase_orders
-        FOR EACH ROW
-        SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'Simulated shipment database failure'
-        """);
+                CREATE TRIGGER test_fail_shipment_order_update
+                BEFORE UPDATE ON purchase_orders
+                FOR EACH ROW
+                SIGNAL SQLSTATE '45000'
+                SET MESSAGE_TEXT = 'Simulated shipment database failure'
+                """);
 
         try {
-            // Shipping should fail and roll back the entire transaction.
             assertThrows(
                     RuntimeException.class,
                     () -> purchaseOrderService.shipOrder(
                             data.orderId(),
-                            ADMIN_EMAIL
+                            data.supplierEmail()
                     )
             );
 
         } finally {
-            // Always remove the test trigger.
             jdbcTemplate.execute(
                     "DROP TRIGGER IF EXISTS test_fail_shipment_order_update"
             );
@@ -374,18 +469,14 @@ class PurchaseOrderServiceIntegrationTest {
                                 data.orderId()
                         );
 
-        // Order must remain confirmed.
         assertEquals(OrderStatus.CONFIRMED, order.getStatus());
-
-        // Reserved inventory must remain unchanged.
         assertEquals(20, product.getAvailableQuantity());
 
         // Shipment transaction must be rolled back.
         assertTrue(
                 transactions.stream().noneMatch(transaction ->
                         transaction.getTransactionType()
-                                == InventoryTransactionType.SHIPPED
-                )
+                                == InventoryTransactionType.SHIPPED)
         );
     }
 
@@ -394,33 +485,31 @@ class PurchaseOrderServiceIntegrationTest {
 
         TestData data = createTestData(100);
 
-        // Confirm order: inventory decreases from 100 to 20.
+        // Confirm order.
         purchaseOrderService.confirmOrder(
                 data.orderId(),
-                ADMIN_EMAIL
+                data.supplierEmail()
         );
 
-        // Create a trigger that deliberately rejects purchase-order updates.
+        // Reject purchase-order updates deliberately.
         jdbcTemplate.execute("""
-            CREATE TRIGGER test_fail_order_update
-            BEFORE UPDATE ON purchase_orders
-            FOR EACH ROW
-            SIGNAL SQLSTATE '45000'
-            SET MESSAGE_TEXT = 'Simulated database failure'
-            """);
+                CREATE TRIGGER test_fail_order_update
+                BEFORE UPDATE ON purchase_orders
+                FOR EACH ROW
+                SIGNAL SQLSTATE '45000'
+                SET MESSAGE_TEXT = 'Simulated database failure'
+                """);
 
         try {
-            // Cancellation should fail during transaction commit.
             assertThrows(
                     RuntimeException.class,
                     () -> purchaseOrderService.cancelOrder(
                             data.orderId(),
-                            ADMIN_EMAIL
+                            data.buyerEmail()
                     )
             );
 
         } finally {
-            // Always remove the test trigger.
             jdbcTemplate.execute(
                     "DROP TRIGGER IF EXISTS test_fail_order_update"
             );

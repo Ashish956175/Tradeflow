@@ -1,13 +1,13 @@
 package com.tradeflow.api.order;
 
-
-import com.tradeflow.api.organization.Organization;
+import com.tradeflow.api.inventory.InventoryService;
+import com.tradeflow.api.organization.OrganizationCapability;
 import com.tradeflow.api.procurement.ProcurementRequest;
 import com.tradeflow.api.quotation.Quotation;
 import com.tradeflow.api.quotation.QuotationRepository;
 import com.tradeflow.api.quotation.QuotationStatus;
+import com.tradeflow.api.security.MembershipAuthorizationService;
 import com.tradeflow.api.user.User;
-import com.tradeflow.api.user.UserRepository;
 import com.tradeflow.api.user.UserRole;
 
 import org.springframework.http.HttpStatus;
@@ -15,28 +15,25 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
-import com.tradeflow.api.inventory.InventoryService;
-
 import java.util.List;
-import java.util.Locale;
 
 @Service
 public class PurchaseOrderService {
 
     private final PurchaseOrderRepository purchaseOrderRepository;
     private final QuotationRepository quotationRepository;
-    private final UserRepository userRepository;
+    private final MembershipAuthorizationService membershipAuthorizationService;
     private final InventoryService inventoryService;
 
     public PurchaseOrderService(
             PurchaseOrderRepository purchaseOrderRepository,
             QuotationRepository quotationRepository,
-            UserRepository userRepository,
+            MembershipAuthorizationService membershipAuthorizationService,
             InventoryService inventoryService
     ) {
         this.purchaseOrderRepository = purchaseOrderRepository;
         this.quotationRepository = quotationRepository;
-        this.userRepository = userRepository;
+        this.membershipAuthorizationService = membershipAuthorizationService;
         this.inventoryService = inventoryService;
     }
 
@@ -47,8 +44,10 @@ public class PurchaseOrderService {
             String deliveryAddress,
             String authenticatedEmail
     ) {
-        User user = getAuthenticatedUser(authenticatedEmail);
-        requireRole(user, UserRole.BUYER);
+        User user = membershipAuthorizationService
+                .getAuthenticatedUser(authenticatedEmail);
+
+        rejectPlatformAdmin(user);
 
         Quotation quotation = quotationRepository.findById(quotationId)
                 .orElseThrow(() -> new ResponseStatusException(
@@ -56,7 +55,13 @@ public class PurchaseOrderService {
                         "Quotation not found"
                 ));
 
-        verifyBuyerOwnsQuotation(user, quotation);
+        Long buyerOrganizationId = getBuyerOrganizationId(quotation);
+
+        membershipAuthorizationService.requireOrganizationCapability(
+                authenticatedEmail,
+                buyerOrganizationId,
+                OrganizationCapability.BUYER
+        );
 
         if (quotation.getStatus() != QuotationStatus.ACCEPTED) {
             throw new ResponseStatusException(
@@ -88,27 +93,30 @@ public class PurchaseOrderService {
         return purchaseOrderRepository.save(purchaseOrder);
     }
 
-    // Retrieve an order by database ID after checking ownership.
+    // Retrieve an order by database ID after checking organization access.
     @Transactional(readOnly = true)
     public PurchaseOrder getOrderById(
             Long id,
             String authenticatedEmail
     ) {
-        User user = getAuthenticatedUser(authenticatedEmail);
+        User user = membershipAuthorizationService
+                .getAuthenticatedUser(authenticatedEmail);
+
         PurchaseOrder order = findOrderById(id);
 
-        verifyOrderAccess(user, order);
+        verifyOrderReadAccess(user, order, authenticatedEmail);
 
         return order;
     }
 
-    // Retrieve an order by business order number after checking ownership.
+    // Retrieve an order by business order number after checking organization access.
     @Transactional(readOnly = true)
     public PurchaseOrder getOrderByNumber(
             String orderNumber,
             String authenticatedEmail
     ) {
-        User user = getAuthenticatedUser(authenticatedEmail);
+        User user = membershipAuthorizationService
+                .getAuthenticatedUser(authenticatedEmail);
 
         PurchaseOrder order = purchaseOrderRepository
                 .findByOrderNumber(orderNumber)
@@ -117,47 +125,57 @@ public class PurchaseOrderService {
                         "Purchase order not found"
                 ));
 
-        verifyOrderAccess(user, order);
+        verifyOrderReadAccess(user, order, authenticatedEmail);
 
         return order;
     }
 
-    // Only administrators can retrieve every order.
+    // Only platform administrators can retrieve every order.
     @Transactional(readOnly = true)
     public List<PurchaseOrder> getAllOrders(String authenticatedEmail) {
-        User user = getAuthenticatedUser(authenticatedEmail);
-        requireRole(user, UserRole.ADMIN);
+
+        membershipAuthorizationService
+                .requirePlatformAdmin(authenticatedEmail);
 
         return purchaseOrderRepository.findAll();
     }
 
-    // Only administrators can filter all orders by status.
+    // Only platform administrators can filter all orders by status.
     @Transactional(readOnly = true)
     public List<PurchaseOrder> getOrdersByStatus(
             OrderStatus status,
             String authenticatedEmail
     ) {
-        User user = getAuthenticatedUser(authenticatedEmail);
-        requireRole(user, UserRole.ADMIN);
+        membershipAuthorizationService
+                .requirePlatformAdmin(authenticatedEmail);
 
         return purchaseOrderRepository.findByStatus(status);
     }
 
-    // Only administrators can confirm orders.
-    // Only administrators can confirm orders and reserve inventory.
+    // Supplier members with SUPPLIER capability confirm orders and reserve inventory.
     @Transactional
     public PurchaseOrder confirmOrder(
             Long id,
             String authenticatedEmail
     ) {
-        User user = getAuthenticatedUser(authenticatedEmail);
-        requireRole(user, UserRole.ADMIN);
+        User user = membershipAuthorizationService
+                .getAuthenticatedUser(authenticatedEmail);
+
+        rejectPlatformAdmin(user);
 
         PurchaseOrder order = purchaseOrderRepository.findByIdForUpdate(id)
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND,
                         "Purchase order not found"
                 ));
+
+        Long supplierOrganizationId = getSupplierOrganizationId(order);
+
+        membershipAuthorizationService.requireOrganizationCapability(
+                authenticatedEmail,
+                supplierOrganizationId,
+                OrganizationCapability.SUPPLIER
+        );
 
         if (order.getStatus() != OrderStatus.CREATED) {
             throw new ResponseStatusException(
@@ -198,20 +216,30 @@ public class PurchaseOrderService {
         return purchaseOrderRepository.save(order);
     }
 
-    // Only administrators can mark orders as shipped.
+    // Supplier members with SUPPLIER capability can mark orders as shipped.
     @Transactional
     public PurchaseOrder shipOrder(
             Long id,
             String authenticatedEmail
     ) {
-        User user = getAuthenticatedUser(authenticatedEmail);
-        requireRole(user, UserRole.ADMIN);
+        User user = membershipAuthorizationService
+                .getAuthenticatedUser(authenticatedEmail);
+
+        rejectPlatformAdmin(user);
 
         PurchaseOrder order = purchaseOrderRepository.findByIdForUpdate(id)
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND,
                         "Purchase order not found"
                 ));
+
+        Long supplierOrganizationId = getSupplierOrganizationId(order);
+
+        membershipAuthorizationService.requireOrganizationCapability(
+                authenticatedEmail,
+                supplierOrganizationId,
+                OrganizationCapability.SUPPLIER
+        );
 
         try {
             order.ship();
@@ -237,16 +265,26 @@ public class PurchaseOrderService {
         return purchaseOrderRepository.save(order);
     }
 
-    // Only administrators can mark orders as delivered.
+    // Buyer members with BUYER capability can mark orders as delivered.
     @Transactional
     public PurchaseOrder deliverOrder(
             Long id,
             String authenticatedEmail
     ) {
-        User user = getAuthenticatedUser(authenticatedEmail);
-        requireRole(user, UserRole.ADMIN);
+        User user = membershipAuthorizationService
+                .getAuthenticatedUser(authenticatedEmail);
+
+        rejectPlatformAdmin(user);
 
         PurchaseOrder order = findOrderById(id);
+
+        Long buyerOrganizationId = getBuyerOrganizationId(order);
+
+        membershipAuthorizationService.requireOrganizationCapability(
+                authenticatedEmail,
+                buyerOrganizationId,
+                OrganizationCapability.BUYER
+        );
 
         try {
             order.deliver();
@@ -260,21 +298,31 @@ public class PurchaseOrderService {
         return purchaseOrderRepository.save(order);
     }
 
-    // Only administrators can cancel orders.
-    // Only administrators can cancel orders and release reserved inventory.
+    // Buyer members with BUYER capability can cancel eligible orders.
+    // Cancelling a confirmed order releases its reserved inventory.
     @Transactional
     public PurchaseOrder cancelOrder(
             Long id,
             String authenticatedEmail
     ) {
-        User user = getAuthenticatedUser(authenticatedEmail);
-        requireRole(user, UserRole.ADMIN);
+        User user = membershipAuthorizationService
+                .getAuthenticatedUser(authenticatedEmail);
+
+        rejectPlatformAdmin(user);
 
         PurchaseOrder order = purchaseOrderRepository.findByIdForUpdate(id)
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND,
                         "Purchase order not found"
                 ));
+
+        Long buyerOrganizationId = getBuyerOrganizationId(order);
+
+        membershipAuthorizationService.requireOrganizationCapability(
+                authenticatedEmail,
+                buyerOrganizationId,
+                OrganizationCapability.BUYER
+        );
 
         OrderStatus previousStatus = order.getStatus();
 
@@ -303,6 +351,8 @@ public class PurchaseOrderService {
 
         return purchaseOrderRepository.save(order);
     }
+
+    // Find an order by its database ID.
     private PurchaseOrder findOrderById(Long id) {
         return purchaseOrderRepository.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(
@@ -311,96 +361,54 @@ public class PurchaseOrderService {
                 ));
     }
 
-    private User getAuthenticatedUser(String email) {
-        String normalizedEmail = email.trim()
-                .toLowerCase(Locale.ROOT);
-
-        User user = userRepository.findByEmail(normalizedEmail)
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.UNAUTHORIZED,
-                        "Authenticated user not found"
-                ));
-
-        if (!user.isEnabled()) {
+    // Platform administrators cannot perform purchase-order mutations.
+    private void rejectPlatformAdmin(User user) {
+        if (user.getRole() == UserRole.ADMIN) {
             throw new ResponseStatusException(
                     HttpStatus.FORBIDDEN,
-                    "Your account is disabled"
-            );
-        }
-
-        return user;
-    }
-
-    private void requireRole(User user, UserRole requiredRole) {
-        if (user.getRole() != requiredRole) {
-            throw new ResponseStatusException(
-                    HttpStatus.FORBIDDEN,
-                    "You do not have permission to perform this action"
+                    "Platform administrators cannot perform this purchase-order operation"
             );
         }
     }
 
-    private Organization requireOrganization(User user) {
-        Organization organization = user.getOrganization();
-
-        if (organization == null) {
-            throw new ResponseStatusException(
-                    HttpStatus.FORBIDDEN,
-                    "Your account is not associated with an organization"
-            );
-        }
-
-        return organization;
-    }
-
-    private void verifyBuyerOwnsQuotation(
+    // Verify that the user can read an order through either organization.
+    private void verifyOrderReadAccess(
             User user,
-            Quotation quotation
-    ) {
-        Organization organization = requireOrganization(user);
-
-        Long buyerOrganizationId = quotation
-                .getProcurementRequest()
-                .getBuyerOrganization()
-                .getId();
-
-        if (!organization.getId().equals(buyerOrganizationId)) {
-            throw new ResponseStatusException(
-                    HttpStatus.FORBIDDEN,
-                    "You cannot create an order from another buyer's quotation"
-            );
-        }
-    }
-
-    private void verifyOrderAccess(
-            User user,
-            PurchaseOrder order
+            PurchaseOrder order,
+            String authenticatedEmail
     ) {
         if (user.getRole() == UserRole.ADMIN) {
             return;
         }
 
-        Organization organization = requireOrganization(user);
+        Long buyerOrganizationId = getBuyerOrganizationId(order);
+        Long supplierOrganizationId = getSupplierOrganizationId(order);
 
-        if (user.getRole() == UserRole.BUYER) {
-            Long buyerOrganizationId = order.getQuotation()
-                    .getProcurementRequest()
-                    .getBuyerOrganization()
-                    .getId();
+        try {
+            membershipAuthorizationService.requireOrganizationCapability(
+                    authenticatedEmail,
+                    buyerOrganizationId,
+                    OrganizationCapability.BUYER
+            );
 
-            if (organization.getId().equals(buyerOrganizationId)) {
-                return;
+            return;
+        } catch (ResponseStatusException exception) {
+            if (exception.getStatusCode() != HttpStatus.FORBIDDEN) {
+                throw exception;
             }
         }
 
-        if (user.getRole() == UserRole.SUPPLIER) {
-            Long supplierOrganizationId = order.getQuotation()
-                    .getSupplier()
-                    .getOrganization()
-                    .getId();
+        try {
+            membershipAuthorizationService.requireOrganizationCapability(
+                    authenticatedEmail,
+                    supplierOrganizationId,
+                    OrganizationCapability.SUPPLIER
+            );
 
-            if (organization.getId().equals(supplierOrganizationId)) {
-                return;
+            return;
+        } catch (ResponseStatusException exception) {
+            if (exception.getStatusCode() != HttpStatus.FORBIDDEN) {
+                throw exception;
             }
         }
 
@@ -409,6 +417,24 @@ public class PurchaseOrderService {
                 "You do not have permission to access this purchase order"
         );
     }
+
+    // Derive the buyer organization from the quotation's procurement request.
+    private Long getBuyerOrganizationId(Quotation quotation) {
+        return quotation.getProcurementRequest()
+                .getBuyerOrganization()
+                .getId();
+    }
+
+    // Derive the buyer organization from the purchase order.
+    private Long getBuyerOrganizationId(PurchaseOrder order) {
+        return getBuyerOrganizationId(order.getQuotation());
+    }
+
+    // Derive the supplier organization from the quotation's supplier profile.
+    private Long getSupplierOrganizationId(PurchaseOrder order) {
+        return order.getQuotation()
+                .getSupplier()
+                .getOrganization()
+                .getId();
+    }
 }
-
-

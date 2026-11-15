@@ -1,12 +1,15 @@
 package com.tradeflow.api.order;
 
 import com.tradeflow.api.inventory.InventoryService;
+import com.tradeflow.api.organization.Organization;
+import com.tradeflow.api.organization.OrganizationCapability;
 import com.tradeflow.api.product.Product;
 import com.tradeflow.api.procurement.ProcurementRequest;
 import com.tradeflow.api.quotation.Quotation;
 import com.tradeflow.api.quotation.QuotationRepository;
+import com.tradeflow.api.security.MembershipAuthorizationService;
+import com.tradeflow.api.supplier.Supplier;
 import com.tradeflow.api.user.User;
-import com.tradeflow.api.user.UserRepository;
 import com.tradeflow.api.user.UserRole;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -30,9 +33,12 @@ class PurchaseOrderServiceTest {
 
     private static final Long ORDER_ID = 1L;
     private static final Long PRODUCT_ID = 10L;
+    private static final Long BUYER_ORG_ID = 100L;
+    private static final Long SUPPLIER_ORG_ID = 200L;
 
     private static final String ADMIN_EMAIL = "admin@tradeflow.test";
     private static final String BUYER_EMAIL = "buyer@tradeflow.test";
+    private static final String SUPPLIER_EMAIL = "supplier@tradeflow.test";
 
     @Mock
     private PurchaseOrderRepository purchaseOrderRepository;
@@ -41,7 +47,7 @@ class PurchaseOrderServiceTest {
     private QuotationRepository quotationRepository;
 
     @Mock
-    private UserRepository userRepository;
+    private MembershipAuthorizationService membershipAuthorizationService;
 
     @Mock
     private InventoryService inventoryService;
@@ -51,19 +57,31 @@ class PurchaseOrderServiceTest {
 
     private User admin;
     private User buyer;
+    private User supplierUser;
+
     private PurchaseOrder order;
     private Quotation quotation;
     private ProcurementRequest procurementRequest;
     private Product product;
 
+    private Organization buyerOrganization;
+    private Organization supplierOrganization;
+    private Supplier supplier;
+
     @BeforeEach
     void setUp() {
         admin = mock(User.class);
         buyer = mock(User.class);
+        supplierUser = mock(User.class);
+
         order = mock(PurchaseOrder.class);
         quotation = mock(Quotation.class);
         procurementRequest = mock(ProcurementRequest.class);
         product = mock(Product.class);
+
+        buyerOrganization = mock(Organization.class);
+        supplierOrganization = mock(Organization.class);
+        supplier = mock(Supplier.class);
     }
 
     // --------------------------------------------------
@@ -71,23 +89,73 @@ class PurchaseOrderServiceTest {
     // --------------------------------------------------
 
     private void authenticateAdmin() {
-        when(userRepository.findByEmail(ADMIN_EMAIL))
-                .thenReturn(Optional.of(admin));
+        when(membershipAuthorizationService.getAuthenticatedUser(ADMIN_EMAIL))
+                .thenReturn(admin);
 
-        when(admin.isEnabled()).thenReturn(true);
         when(admin.getRole()).thenReturn(UserRole.ADMIN);
     }
 
     private void authenticateBuyer() {
-        when(userRepository.findByEmail(BUYER_EMAIL))
-                .thenReturn(Optional.of(buyer));
+        when(membershipAuthorizationService.getAuthenticatedUser(BUYER_EMAIL))
+                .thenReturn(buyer);
 
-        when(buyer.isEnabled()).thenReturn(true);
         when(buyer.getRole()).thenReturn(UserRole.BUYER);
     }
 
+    private void authenticateSupplier() {
+        when(membershipAuthorizationService.getAuthenticatedUser(SUPPLIER_EMAIL))
+                .thenReturn(supplierUser);
+
+        when(supplierUser.getRole()).thenReturn(UserRole.SUPPLIER);
+    }
+
     // --------------------------------------------------
-    // Purchase order setup helper
+    // Organization authorization helpers
+    // --------------------------------------------------
+
+    private void configureBuyerAuthorization() {
+        when(order.getQuotation()).thenReturn(quotation);
+
+        when(quotation.getProcurementRequest())
+                .thenReturn(procurementRequest);
+
+        when(procurementRequest.getBuyerOrganization())
+                .thenReturn(buyerOrganization);
+
+        when(buyerOrganization.getId())
+                .thenReturn(BUYER_ORG_ID);
+    }
+
+    private void configureSupplierAuthorization() {
+        when(order.getQuotation()).thenReturn(quotation);
+
+        when(quotation.getSupplier()).thenReturn(supplier);
+
+        when(supplier.getOrganization())
+                .thenReturn(supplierOrganization);
+
+        when(supplierOrganization.getId())
+                .thenReturn(SUPPLIER_ORG_ID);
+    }
+
+    private void authorizeBuyer() {
+        when(membershipAuthorizationService.requireOrganizationCapability(
+                BUYER_EMAIL,
+                BUYER_ORG_ID,
+                OrganizationCapability.BUYER
+        )).thenReturn(null);
+    }
+
+    private void authorizeSupplier() {
+        when(membershipAuthorizationService.requireOrganizationCapability(
+                SUPPLIER_EMAIL,
+                SUPPLIER_ORG_ID,
+                OrganizationCapability.SUPPLIER
+        )).thenReturn(null);
+    }
+
+    // --------------------------------------------------
+    // Purchase order setup helpers
     // --------------------------------------------------
 
     private void configureOrder(OrderStatus status, int quantity) {
@@ -116,16 +184,18 @@ class PurchaseOrderServiceTest {
 
     @Test
     void confirmOrder_shouldReserveInventoryAndConfirmOrder() {
-        authenticateAdmin();
+        authenticateSupplier();
         configureOrder(OrderStatus.CREATED, 5);
         configureProductRelationship();
+        configureSupplierAuthorization();
+        authorizeSupplier();
 
         when(purchaseOrderRepository.save(order))
                 .thenReturn(order);
 
         PurchaseOrder result = purchaseOrderService.confirmOrder(
                 ORDER_ID,
-                ADMIN_EMAIL
+                SUPPLIER_EMAIL
         );
 
         assertSame(order, result);
@@ -133,12 +203,11 @@ class PurchaseOrderServiceTest {
         verify(inventoryService).reserveForOrder(
                 PRODUCT_ID,
                 5,
-                admin,
+                supplierUser,
                 order
         );
 
         verify(order).confirm();
-
         verify(purchaseOrderRepository).save(order);
 
         verify(inventoryService, never()).releaseForOrder(
@@ -151,9 +220,11 @@ class PurchaseOrderServiceTest {
 
     @Test
     void confirmOrder_shouldRejectInsufficientInventory() {
-        authenticateAdmin();
+        authenticateSupplier();
         configureOrder(OrderStatus.CREATED, 5);
         configureProductRelationship();
+        configureSupplierAuthorization();
+        authorizeSupplier();
 
         doThrow(new ResponseStatusException(
                 HttpStatus.CONFLICT,
@@ -161,7 +232,7 @@ class PurchaseOrderServiceTest {
         )).when(inventoryService).reserveForOrder(
                 PRODUCT_ID,
                 5,
-                admin,
+                supplierUser,
                 order
         );
 
@@ -169,7 +240,7 @@ class PurchaseOrderServiceTest {
                 ResponseStatusException.class,
                 () -> purchaseOrderService.confirmOrder(
                         ORDER_ID,
-                        ADMIN_EMAIL
+                        SUPPLIER_EMAIL
                 )
         );
 
@@ -178,29 +249,30 @@ class PurchaseOrderServiceTest {
         verify(inventoryService).reserveForOrder(
                 PRODUCT_ID,
                 5,
-                admin,
+                supplierUser,
                 order
         );
 
         verify(order, never()).confirm();
-
         verify(purchaseOrderRepository, never()).save(any());
     }
 
     @Test
     void confirmOrder_shouldRejectAlreadyConfirmedOrder() {
-        authenticateAdmin();
-
+        authenticateSupplier();
         when(purchaseOrderRepository.findByIdForUpdate(ORDER_ID))
                 .thenReturn(Optional.of(order));
 
-        when(order.getStatus()).thenReturn(OrderStatus.CONFIRMED);
+        when(order.getStatus())
+                .thenReturn(OrderStatus.CONFIRMED);
+        configureSupplierAuthorization();
+        authorizeSupplier();
 
         ResponseStatusException exception = assertThrows(
                 ResponseStatusException.class,
                 () -> purchaseOrderService.confirmOrder(
                         ORDER_ID,
-                        ADMIN_EMAIL
+                        SUPPLIER_EMAIL
                 )
         );
 
@@ -214,20 +286,21 @@ class PurchaseOrderServiceTest {
         );
 
         verify(order, never()).confirm();
-
         verify(purchaseOrderRepository, never()).save(any());
     }
 
     @Test
     void confirmOrder_shouldRejectZeroQuantity() {
-        authenticateAdmin();
+        authenticateSupplier();
         configureOrder(OrderStatus.CREATED, 0);
+        configureSupplierAuthorization();
+        authorizeSupplier();
 
         ResponseStatusException exception = assertThrows(
                 ResponseStatusException.class,
                 () -> purchaseOrderService.confirmOrder(
                         ORDER_ID,
-                        ADMIN_EMAIL
+                        SUPPLIER_EMAIL
                 )
         );
 
@@ -241,20 +314,21 @@ class PurchaseOrderServiceTest {
         );
 
         verify(order, never()).confirm();
-
         verify(purchaseOrderRepository, never()).save(any());
     }
 
     @Test
     void confirmOrder_shouldRejectNegativeQuantity() {
-        authenticateAdmin();
+        authenticateSupplier();
         configureOrder(OrderStatus.CREATED, -5);
+        configureSupplierAuthorization();
+        authorizeSupplier();
 
         ResponseStatusException exception = assertThrows(
                 ResponseStatusException.class,
                 () -> purchaseOrderService.confirmOrder(
                         ORDER_ID,
-                        ADMIN_EMAIL
+                        SUPPLIER_EMAIL
                 )
         );
 
@@ -268,13 +342,24 @@ class PurchaseOrderServiceTest {
         );
 
         verify(order, never()).confirm();
-
         verify(purchaseOrderRepository, never()).save(any());
     }
 
     @Test
-    void confirmOrder_shouldRejectNonAdmin() {
+    void confirmOrder_shouldRejectBuyerWithoutSupplierCapability() {
         authenticateBuyer();
+        when(purchaseOrderRepository.findByIdForUpdate(ORDER_ID))
+                .thenReturn(Optional.of(order));
+        configureSupplierAuthorization();
+
+        when(membershipAuthorizationService.requireOrganizationCapability(
+                BUYER_EMAIL,
+                SUPPLIER_ORG_ID,
+                OrganizationCapability.SUPPLIER
+        )).thenThrow(new ResponseStatusException(
+                HttpStatus.FORBIDDEN,
+                "Supplier capability required"
+        ));
 
         ResponseStatusException exception = assertThrows(
                 ResponseStatusException.class,
@@ -287,9 +372,26 @@ class PurchaseOrderServiceTest {
         assertEquals(403, exception.getStatusCode().value());
 
         verifyNoInteractions(inventoryService);
+        verify(order, never()).confirm();
+        verify(purchaseOrderRepository, never()).save(any());
+    }
 
-        verify(purchaseOrderRepository, never())
-                .findByIdForUpdate(anyLong());
+    @Test
+    void confirmOrder_shouldRejectPlatformAdmin() {
+        authenticateAdmin();
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> purchaseOrderService.confirmOrder(
+                        ORDER_ID,
+                        ADMIN_EMAIL
+                )
+        );
+
+        assertEquals(403, exception.getStatusCode().value());
+
+        verify(purchaseOrderRepository, never()).findByIdForUpdate(anyLong());
+        verifyNoInteractions(inventoryService);
     }
 
     // --------------------------------------------------
@@ -298,19 +400,23 @@ class PurchaseOrderServiceTest {
 
     @Test
     void shipOrder_shouldRecordShipmentAndPreserveAvailableInventory() {
-        authenticateAdmin();
+        authenticateSupplier();
+
         when(purchaseOrderRepository.findByIdForUpdate(ORDER_ID))
                 .thenReturn(Optional.of(order));
 
         when(order.getOrderedQuantity()).thenReturn(5);
+
         configureProductRelationship();
+        configureSupplierAuthorization();
+        authorizeSupplier();
 
         when(purchaseOrderRepository.save(order))
                 .thenReturn(order);
 
         PurchaseOrder result = purchaseOrderService.shipOrder(
                 ORDER_ID,
-                ADMIN_EMAIL
+                SUPPLIER_EMAIL
         );
 
         assertSame(order, result);
@@ -320,7 +426,7 @@ class PurchaseOrderServiceTest {
         verify(inventoryService).recordShipmentForOrder(
                 PRODUCT_ID,
                 5,
-                admin,
+                supplierUser,
                 order
         );
 
@@ -329,31 +435,49 @@ class PurchaseOrderServiceTest {
 
     @Test
     void shipOrder_shouldRejectInvalidOrderStatus() {
-        authenticateAdmin();
+        authenticateSupplier();
+
         when(purchaseOrderRepository.findByIdForUpdate(ORDER_ID))
                 .thenReturn(Optional.of(order));
 
-        doThrow(new IllegalStateException("Order must be confirmed before shipping"))
-                .when(order).ship();
+        configureSupplierAuthorization();
+        authorizeSupplier();
+
+        doThrow(new IllegalStateException(
+                "Order must be confirmed before shipping"
+        )).when(order).ship();
 
         ResponseStatusException exception = assertThrows(
                 ResponseStatusException.class,
                 () -> purchaseOrderService.shipOrder(
                         ORDER_ID,
-                        ADMIN_EMAIL
+                        SUPPLIER_EMAIL
                 )
         );
 
         assertEquals(409, exception.getStatusCode().value());
 
         verifyNoInteractions(inventoryService);
-
         verify(purchaseOrderRepository, never()).save(any());
     }
 
     @Test
-    void shipOrder_shouldRejectNonAdmin() {
+    void shipOrder_shouldRejectBuyerWithoutSupplierCapability() {
         authenticateBuyer();
+
+        when(purchaseOrderRepository.findByIdForUpdate(ORDER_ID))
+                .thenReturn(Optional.of(order));
+
+        configureSupplierAuthorization();
+
+        when(membershipAuthorizationService.requireOrganizationCapability(
+                BUYER_EMAIL,
+                SUPPLIER_ORG_ID,
+                OrganizationCapability.SUPPLIER
+        )).thenThrow(new ResponseStatusException(
+                HttpStatus.FORBIDDEN,
+                "Supplier capability required"
+        ));
 
         ResponseStatusException exception = assertThrows(
                 ResponseStatusException.class,
@@ -366,26 +490,47 @@ class PurchaseOrderServiceTest {
         assertEquals(403, exception.getStatusCode().value());
 
         verifyNoInteractions(inventoryService);
+        verify(order, never()).ship();
+        verify(purchaseOrderRepository, never()).save(any());
+    }
 
-        verify(purchaseOrderRepository, never())
-                .findByIdForUpdate(anyLong());
+    @Test
+    void shipOrder_shouldRejectPlatformAdmin() {
+        authenticateAdmin();
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> purchaseOrderService.shipOrder(
+                        ORDER_ID,
+                        ADMIN_EMAIL
+                )
+        );
+
+        assertEquals(403, exception.getStatusCode().value());
+
+        verify(purchaseOrderRepository, never()).findByIdForUpdate(anyLong());
+        verifyNoInteractions(inventoryService);
     }
 
     @Test
     void shipOrder_shouldNotSaveOrderWhenInventoryRecordingFails() {
-        authenticateAdmin();
+        authenticateSupplier();
+
         when(purchaseOrderRepository.findByIdForUpdate(ORDER_ID))
                 .thenReturn(Optional.of(order));
 
         when(order.getOrderedQuantity()).thenReturn(5);
+
         configureProductRelationship();
+        configureSupplierAuthorization();
+        authorizeSupplier();
 
         doThrow(new RuntimeException("Inventory recording failed"))
                 .when(inventoryService)
                 .recordShipmentForOrder(
                         PRODUCT_ID,
                         5,
-                        admin,
+                        supplierUser,
                         order
                 );
 
@@ -393,7 +538,7 @@ class PurchaseOrderServiceTest {
                 RuntimeException.class,
                 () -> purchaseOrderService.shipOrder(
                         ORDER_ID,
-                        ADMIN_EMAIL
+                        SUPPLIER_EMAIL
                 )
         );
 
@@ -402,7 +547,7 @@ class PurchaseOrderServiceTest {
         verify(inventoryService).recordShipmentForOrder(
                 PRODUCT_ID,
                 5,
-                admin,
+                supplierUser,
                 order
         );
 
@@ -415,16 +560,19 @@ class PurchaseOrderServiceTest {
 
     @Test
     void cancelOrder_shouldReleaseInventoryForConfirmedOrder() {
-        authenticateAdmin();
+        authenticateBuyer();
+
         configureOrder(OrderStatus.CONFIRMED, 5);
         configureProductRelationship();
+        configureBuyerAuthorization();
+        authorizeBuyer();
 
         when(purchaseOrderRepository.save(order))
                 .thenReturn(order);
 
         PurchaseOrder result = purchaseOrderService.cancelOrder(
                 ORDER_ID,
-                ADMIN_EMAIL
+                BUYER_EMAIL
         );
 
         assertSame(order, result);
@@ -434,7 +582,7 @@ class PurchaseOrderServiceTest {
         verify(inventoryService).releaseForOrder(
                 PRODUCT_ID,
                 5,
-                admin,
+                buyer,
                 order
         );
 
@@ -443,19 +591,22 @@ class PurchaseOrderServiceTest {
 
     @Test
     void cancelOrder_shouldNotReleaseInventoryForCreatedOrder() {
-        authenticateAdmin();
+        authenticateBuyer();
 
         when(purchaseOrderRepository.findByIdForUpdate(ORDER_ID))
                 .thenReturn(Optional.of(order));
 
         when(order.getStatus()).thenReturn(OrderStatus.CREATED);
 
+        configureBuyerAuthorization();
+        authorizeBuyer();
+
         when(purchaseOrderRepository.save(order))
                 .thenReturn(order);
 
         PurchaseOrder result = purchaseOrderService.cancelOrder(
                 ORDER_ID,
-                ADMIN_EMAIL
+                BUYER_EMAIL
         );
 
         assertSame(order, result);
@@ -474,12 +625,15 @@ class PurchaseOrderServiceTest {
 
     @Test
     void cancelOrder_shouldRejectShippedOrder() {
-        authenticateAdmin();
+        authenticateBuyer();
 
         when(purchaseOrderRepository.findByIdForUpdate(ORDER_ID))
                 .thenReturn(Optional.of(order));
 
         when(order.getStatus()).thenReturn(OrderStatus.SHIPPED);
+
+        configureBuyerAuthorization();
+        authorizeBuyer();
 
         doThrow(new IllegalStateException(
                 "Only created or confirmed orders can be cancelled"
@@ -489,7 +643,7 @@ class PurchaseOrderServiceTest {
                 ResponseStatusException.class,
                 () -> purchaseOrderService.cancelOrder(
                         ORDER_ID,
-                        ADMIN_EMAIL
+                        BUYER_EMAIL
                 )
         );
 
@@ -508,30 +662,64 @@ class PurchaseOrderServiceTest {
     }
 
     @Test
-    void cancelOrder_shouldRejectNonAdmin() {
-        authenticateBuyer();
+    void cancelOrder_shouldRejectSupplierWithoutBuyerCapability() {
+        authenticateSupplier();
+
+        when(purchaseOrderRepository.findByIdForUpdate(ORDER_ID))
+                .thenReturn(Optional.of(order));
+
+        configureBuyerAuthorization();
+
+        when(membershipAuthorizationService.requireOrganizationCapability(
+                SUPPLIER_EMAIL,
+                BUYER_ORG_ID,
+                OrganizationCapability.BUYER
+        )).thenThrow(new ResponseStatusException(
+                HttpStatus.FORBIDDEN,
+                "Buyer capability required"
+        ));
 
         ResponseStatusException exception = assertThrows(
                 ResponseStatusException.class,
                 () -> purchaseOrderService.cancelOrder(
                         ORDER_ID,
-                        BUYER_EMAIL
+                        SUPPLIER_EMAIL
                 )
         );
 
         assertEquals(403, exception.getStatusCode().value());
 
         verifyNoInteractions(inventoryService);
+        verify(order, never()).cancel();
+        verify(purchaseOrderRepository, never()).save(any());
+    }
 
-        verify(purchaseOrderRepository, never())
-                .findByIdForUpdate(anyLong());
+    @Test
+    void cancelOrder_shouldRejectPlatformAdmin() {
+        authenticateAdmin();
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> purchaseOrderService.cancelOrder(
+                        ORDER_ID,
+                        ADMIN_EMAIL
+                )
+        );
+
+        assertEquals(403, exception.getStatusCode().value());
+
+        verify(purchaseOrderRepository, never()).findByIdForUpdate(anyLong());
+        verifyNoInteractions(inventoryService);
     }
 
     @Test
     void cancelOrder_shouldRejectWhenInventoryReleaseFails() {
-        authenticateAdmin();
+        authenticateBuyer();
+
         configureOrder(OrderStatus.CONFIRMED, 5);
         configureProductRelationship();
+        configureBuyerAuthorization();
+        authorizeBuyer();
 
         doThrow(new ResponseStatusException(
                 HttpStatus.CONFLICT,
@@ -539,7 +727,7 @@ class PurchaseOrderServiceTest {
         )).when(inventoryService).releaseForOrder(
                 PRODUCT_ID,
                 5,
-                admin,
+                buyer,
                 order
         );
 
@@ -547,7 +735,7 @@ class PurchaseOrderServiceTest {
                 ResponseStatusException.class,
                 () -> purchaseOrderService.cancelOrder(
                         ORDER_ID,
-                        ADMIN_EMAIL
+                        BUYER_EMAIL
                 )
         );
 
@@ -558,7 +746,7 @@ class PurchaseOrderServiceTest {
         verify(inventoryService).releaseForOrder(
                 PRODUCT_ID,
                 5,
-                admin,
+                buyer,
                 order
         );
 
