@@ -157,6 +157,78 @@ public class MembershipAuthorizationService {
         return membership;
     }
 
+    public OrganizationMembership requireAnyOrganizationCapability(
+            String email,
+            Long organizationId,
+            OrganizationCapability... capabilities
+    ) {
+        if (capabilities == null || capabilities.length == 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "At least one organization capability is required"
+            );
+        }
+
+        for (OrganizationCapability capability : capabilities) {
+            if (capability == null) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Organization capability cannot be null"
+                );
+            }
+        }
+
+        OrganizationMembership membership =
+                requireActiveMembership(email, organizationId);
+
+        boolean hasEnabledOrganizationCapability = false;
+
+        for (OrganizationCapability capability : capabilities) {
+            if (organizationCapabilityRepository
+                    .existsByOrganizationIdAndCapability(
+                            organizationId,
+                            capability
+                    )) {
+                hasEnabledOrganizationCapability = true;
+                break;
+            }
+        }
+
+        if (!hasEnabledOrganizationCapability) {
+            throw new ResponseStatusException(
+                    HttpStatus.FORBIDDEN,
+                    "Organization does not have any of the required capabilities enabled"
+            );
+        }
+
+        if (membership.getMembershipRole() == MembershipRole.OWNER) {
+            return membership;
+        }
+
+        for (OrganizationCapability capability : capabilities) {
+            boolean organizationHasCapability =
+                    organizationCapabilityRepository
+                            .existsByOrganizationIdAndCapability(
+                                    organizationId,
+                                    capability
+                            );
+
+            if (organizationHasCapability
+                    && membershipCapabilityRepository
+                    .existsByMembershipIdAndCapability(
+                            membership.getId(),
+                            capability
+                    )) {
+                return membership;
+            }
+        }
+
+        throw new ResponseStatusException(
+                HttpStatus.FORBIDDEN,
+                "Your membership does not have any of the required organization capabilities"
+        );
+    }
+
     public OrganizationMembership requireMembershipRole(
             String email,
             Long organizationId,
