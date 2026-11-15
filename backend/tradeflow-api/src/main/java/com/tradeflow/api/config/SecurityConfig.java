@@ -172,7 +172,7 @@ public class SecurityConfig {
                         .requestMatchers(
                                 HttpMethod.POST,
                                 "/api/v1/shipments"
-                        ).hasRole("SUPPLIER")
+                        ).authenticated()
 
                         // Product catalogue: buyers, suppliers, and admins can read
                         .requestMatchers(

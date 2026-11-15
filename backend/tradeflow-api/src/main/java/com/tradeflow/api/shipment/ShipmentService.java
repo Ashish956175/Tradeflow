@@ -3,9 +3,9 @@ package com.tradeflow.api.shipment;
 import com.tradeflow.api.order.OrderStatus;
 import com.tradeflow.api.order.PurchaseOrder;
 import com.tradeflow.api.order.PurchaseOrderRepository;
-import com.tradeflow.api.organization.Organization;
+import com.tradeflow.api.organization.OrganizationCapability;
+import com.tradeflow.api.security.MembershipAuthorizationService;
 import com.tradeflow.api.user.User;
-import com.tradeflow.api.user.UserRepository;
 import com.tradeflow.api.user.UserRole;
 
 import org.springframework.http.HttpStatus;
@@ -15,23 +15,22 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDate;
 import java.util.List;
-import java.util.Locale;
 
 @Service
 public class ShipmentService {
 
     private final ShipmentRepository shipmentRepository;
     private final PurchaseOrderRepository purchaseOrderRepository;
-    private final UserRepository userRepository;
+    private final MembershipAuthorizationService membershipAuthorizationService;
 
     public ShipmentService(
             ShipmentRepository shipmentRepository,
             PurchaseOrderRepository purchaseOrderRepository,
-            UserRepository userRepository
+            MembershipAuthorizationService membershipAuthorizationService
     ) {
         this.shipmentRepository = shipmentRepository;
         this.purchaseOrderRepository = purchaseOrderRepository;
-        this.userRepository = userRepository;
+        this.membershipAuthorizationService = membershipAuthorizationService;
     }
 
     // Create a shipment for an order belonging to the authenticated supplier.
@@ -40,8 +39,15 @@ public class ShipmentService {
             ShipmentRequest request,
             String authenticatedEmail
     ) {
-        User user = getAuthenticatedUser(authenticatedEmail);
-        requireRole(user, UserRole.SUPPLIER);
+        User user = membershipAuthorizationService
+                .getAuthenticatedUser(authenticatedEmail);
+
+        if (user.getRole() == UserRole.ADMIN) {
+            throw new ResponseStatusException(
+                    HttpStatus.FORBIDDEN,
+                    "Platform administrators cannot create shipments"
+            );
+        }
 
         PurchaseOrder purchaseOrder = purchaseOrderRepository
                 .findById(request.purchaseOrderId())
@@ -50,7 +56,16 @@ public class ShipmentService {
                         "Purchase order not found"
                 ));
 
-        verifySupplierOwnsOrder(user, purchaseOrder);
+        Long supplierOrganizationId = purchaseOrder.getQuotation()
+                .getSupplier()
+                .getOrganization()
+                .getId();
+
+        membershipAuthorizationService.requireOrganizationCapability(
+                authenticatedEmail,
+                supplierOrganizationId,
+                OrganizationCapability.SUPPLIER
+        );
 
         if (purchaseOrder.getStatus() != OrderStatus.SHIPPED) {
             throw new ResponseStatusException(
@@ -87,11 +102,12 @@ public class ShipmentService {
         return shipmentRepository.save(shipment);
     }
 
-    // Only administrators can retrieve all shipments.
+    // Only Platform ADMIN can retrieve all shipments.
     @Transactional(readOnly = true)
     public List<Shipment> getAllShipments(String authenticatedEmail) {
-        User user = getAuthenticatedUser(authenticatedEmail);
-        requireRole(user, UserRole.ADMIN);
+        membershipAuthorizationService.requirePlatformAdmin(
+                authenticatedEmail
+        );
 
         return shipmentRepository.findAll();
     }
@@ -101,10 +117,12 @@ public class ShipmentService {
             Long id,
             String authenticatedEmail
     ) {
-        User user = getAuthenticatedUser(authenticatedEmail);
+        User user = membershipAuthorizationService
+                .getAuthenticatedUser(authenticatedEmail);
 
         Shipment shipment = findShipmentById(id);
-        verifyShipmentAccess(user, shipment);
+
+        verifyShipmentAccess(user, authenticatedEmail, shipment);
 
         return shipment;
     }
@@ -114,7 +132,8 @@ public class ShipmentService {
             String trackingNumber,
             String authenticatedEmail
     ) {
-        User user = getAuthenticatedUser(authenticatedEmail);
+        User user = membershipAuthorizationService
+                .getAuthenticatedUser(authenticatedEmail);
 
         Shipment shipment = shipmentRepository
                 .findByTrackingNumber(trackingNumber.trim())
@@ -123,7 +142,7 @@ public class ShipmentService {
                         "Shipment not found"
                 ));
 
-        verifyShipmentAccess(user, shipment);
+        verifyShipmentAccess(user, authenticatedEmail, shipment);
 
         return shipment;
     }
@@ -133,7 +152,8 @@ public class ShipmentService {
             Long purchaseOrderId,
             String authenticatedEmail
     ) {
-        User user = getAuthenticatedUser(authenticatedEmail);
+        User user = membershipAuthorizationService
+                .getAuthenticatedUser(authenticatedEmail);
 
         PurchaseOrder order = purchaseOrderRepository
                 .findById(purchaseOrderId)
@@ -142,7 +162,7 @@ public class ShipmentService {
                         "Purchase order not found"
                 ));
 
-        verifyOrderAccess(user, order);
+        verifyOrderAccess(user, authenticatedEmail, order);
 
         return shipmentRepository
                 .findByPurchaseOrder_Id(purchaseOrderId)
@@ -152,20 +172,21 @@ public class ShipmentService {
                 ));
     }
 
-    // Only administrators can query shipments across organizations.
+    // Only Platform ADMIN can query shipments across organizations.
     @Transactional(readOnly = true)
     public List<Shipment> getShipmentsByStatus(
             ShipmentStatus status,
             String authenticatedEmail
     ) {
-        User user = getAuthenticatedUser(authenticatedEmail);
-        requireRole(user, UserRole.ADMIN);
+        membershipAuthorizationService.requirePlatformAdmin(
+                authenticatedEmail
+        );
 
         return shipmentRepository.findByStatus(status);
     }
 
-    // Only the supplier responsible for the order or an administrator
-    // can update shipment status.
+    // Only the supplier with SUPPLIER capability can update shipment status.
+    // Platform ADMIN is read-only for shipment operations.
     @Transactional
     public Shipment updateShipmentStatus(
             Long shipmentId,
@@ -179,18 +200,29 @@ public class ShipmentService {
             );
         }
 
-        User user = getAuthenticatedUser(authenticatedEmail);
+        User user = membershipAuthorizationService
+                .getAuthenticatedUser(authenticatedEmail);
 
-        Shipment shipment = findShipmentById(shipmentId);
-
-        if (user.getRole() != UserRole.ADMIN) {
-            requireRole(user, UserRole.SUPPLIER);
-            verifySupplierOwnsOrder(
-                    user,
-                    shipment.getPurchaseOrder()
+        if (user.getRole() == UserRole.ADMIN) {
+            throw new ResponseStatusException(
+                    HttpStatus.FORBIDDEN,
+                    "Platform administrators cannot update shipment status"
             );
         }
 
+        Shipment shipment = findShipmentById(shipmentId);
+
+        Long supplierOrganizationId = shipment.getPurchaseOrder()
+                .getQuotation()
+                .getSupplier()
+                .getOrganization()
+                .getId();
+
+        membershipAuthorizationService.requireOrganizationCapability(
+                authenticatedEmail,
+                supplierOrganizationId,
+                OrganizationCapability.SUPPLIER
+        );
 
         ShipmentStatus currentStatus = shipment.getStatus();
 
@@ -225,8 +257,6 @@ public class ShipmentService {
 
         if (newStatus == ShipmentStatus.DELIVERED) {
             shipment.setActualDeliveryDate(LocalDate.now());
-
-            shipment.getPurchaseOrder().deliver();
         }
 
         return shipmentRepository.save(shipment);
@@ -240,97 +270,43 @@ public class ShipmentService {
                 ));
     }
 
-    private User getAuthenticatedUser(String email) {
-        String normalizedEmail = email.trim()
-                .toLowerCase(Locale.ROOT);
-
-        User user = userRepository.findByEmail(normalizedEmail)
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.UNAUTHORIZED,
-                        "Authenticated user not found"
-                ));
-
-        if (!user.isEnabled()) {
-            throw new ResponseStatusException(
-                    HttpStatus.FORBIDDEN,
-                    "Your account is disabled"
-            );
-        }
-
-        return user;
-    }
-
-    private void requireRole(User user, UserRole requiredRole) {
-        if (user.getRole() != requiredRole) {
-            throw new ResponseStatusException(
-                    HttpStatus.FORBIDDEN,
-                    "You do not have permission to perform this action"
-            );
-        }
-    }
-
-    private Organization requireOrganization(User user) {
-        Organization organization = user.getOrganization();
-
-        if (organization == null) {
-            throw new ResponseStatusException(
-                    HttpStatus.FORBIDDEN,
-                    "Your account is not associated with an organization"
-            );
-        }
-
-        return organization;
-    }
-
-    private void verifySupplierOwnsOrder(
-            User user,
-            PurchaseOrder order
-    ) {
-        Organization organization = requireOrganization(user);
-
-        Long supplierOrganizationId = order.getQuotation()
-                .getSupplier()
-                .getOrganization()
-                .getId();
-
-        if (!organization.getId().equals(supplierOrganizationId)) {
-            throw new ResponseStatusException(
-                    HttpStatus.FORBIDDEN,
-                    "You cannot manage shipments for another supplier's order"
-            );
-        }
-    }
-
     private void verifyOrderAccess(
             User user,
+            String authenticatedEmail,
             PurchaseOrder order
     ) {
         if (user.getRole() == UserRole.ADMIN) {
             return;
         }
 
-        Organization organization = requireOrganization(user);
+        Long buyerOrganizationId = order.getQuotation()
+                .getProcurementRequest()
+                .getBuyerOrganization()
+                .getId();
 
-        if (user.getRole() == UserRole.BUYER) {
-            Long buyerOrganizationId = order.getQuotation()
-                    .getProcurementRequest()
-                    .getBuyerOrganization()
-                    .getId();
+        Long supplierOrganizationId = order.getQuotation()
+                .getSupplier()
+                .getOrganization()
+                .getId();
 
-            if (organization.getId().equals(buyerOrganizationId)) {
-                return;
-            }
+        boolean hasBuyerAccess = hasOrganizationCapability(
+                authenticatedEmail,
+                buyerOrganizationId,
+                OrganizationCapability.BUYER
+        );
+
+        if (hasBuyerAccess) {
+            return;
         }
 
-        if (user.getRole() == UserRole.SUPPLIER) {
-            Long supplierOrganizationId = order.getQuotation()
-                    .getSupplier()
-                    .getOrganization()
-                    .getId();
+        boolean hasSupplierAccess = hasOrganizationCapability(
+                authenticatedEmail,
+                supplierOrganizationId,
+                OrganizationCapability.SUPPLIER
+        );
 
-            if (organization.getId().equals(supplierOrganizationId)) {
-                return;
-            }
+        if (hasSupplierAccess) {
+            return;
         }
 
         throw new ResponseStatusException(
@@ -339,10 +315,40 @@ public class ShipmentService {
         );
     }
 
+    private boolean hasOrganizationCapability(
+            String authenticatedEmail,
+            Long organizationId,
+            OrganizationCapability capability
+    ) {
+        try {
+            membershipAuthorizationService.requireOrganizationCapability(
+                    authenticatedEmail,
+                    organizationId,
+                    capability
+            );
+
+            return true;
+
+        } catch (ResponseStatusException exception) {
+
+            if (exception.getStatusCode().value()
+                    == HttpStatus.FORBIDDEN.value()) {
+                return false;
+            }
+
+            throw exception;
+        }
+    }
+
     private void verifyShipmentAccess(
             User user,
+            String authenticatedEmail,
             Shipment shipment
     ) {
-        verifyOrderAccess(user, shipment.getPurchaseOrder());
+        verifyOrderAccess(
+                user,
+                authenticatedEmail,
+                shipment.getPurchaseOrder()
+        );
     }
 }
