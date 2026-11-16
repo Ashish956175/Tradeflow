@@ -38,6 +38,8 @@ public class ProcurementRequestService {
             String authenticatedEmail,
             Long organizationId
     ) {
+        rejectPlatformAdmin(authenticatedEmail);
+
         OrganizationMembership membership =
                 authorizationService.requireOrganizationCapability(
                         authenticatedEmail,
@@ -69,6 +71,8 @@ public class ProcurementRequestService {
             String authenticatedEmail,
             Long organizationId
     ) {
+        rejectPlatformAdmin(authenticatedEmail);
+
         OrganizationMembership membership =
                 authorizationService.requireOrganizationCapability(
                         authenticatedEmail,
@@ -109,5 +113,18 @@ public class ProcurementRequestService {
         );
 
         return request;
+    }
+
+    private void rejectPlatformAdmin(String authenticatedEmail) {
+        User user = authorizationService.getAuthenticatedUser(
+                authenticatedEmail
+        );
+
+        if (user.getRole() == UserRole.ADMIN) {
+            throw new ResponseStatusException(
+                    HttpStatus.FORBIDDEN,
+                    "Platform administrators cannot perform this operation"
+            );
+        }
     }
 }

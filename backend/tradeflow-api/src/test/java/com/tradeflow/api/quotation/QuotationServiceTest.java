@@ -6,7 +6,6 @@ import com.tradeflow.api.organization.OrganizationCapability;
 import com.tradeflow.api.procurement.ProcurementRequest;
 import com.tradeflow.api.procurement.ProcurementRequestRepository;
 import com.tradeflow.api.procurement.ProcurementStatus;
-import com.tradeflow.api.quotation.*;
 import com.tradeflow.api.relationship.BuyerSupplierRelationship;
 import com.tradeflow.api.relationship.BuyerSupplierRelationshipRepository;
 import com.tradeflow.api.relationship.RelationshipStatus;
@@ -548,19 +547,40 @@ class QuotationServiceTest {
     }
 
     @Test
+    void getQuotationsByProcurementRequest_withUnknownProcurementRequest_shouldReturnNotFound() {
+
+        authenticate(BUYER_EMAIL, buyerUser);
+
+        when(procurementRequestRepository.findById(PROCUREMENT_REQUEST_ID))
+                .thenReturn(Optional.empty());
+
+        assertStatus(
+                HttpStatus.NOT_FOUND,
+                () -> quotationService.getQuotationsByProcurementRequest(
+                        PROCUREMENT_REQUEST_ID,
+                        BUYER_EMAIL,
+                        BUYER_ORGANIZATION_ID
+                )
+        );
+
+        verifyNoInteractions(quotationRepository);
+        verifyNoInteractions(supplierRepository);
+        verifyNoInteractions(relationshipRepository);
+
+        verify(authorizationService, never())
+                .requireOrganizationCapability(any(), any(), any());
+    }
+
+    @Test
     void getQuotationsByProcurementRequest_asSupplier_shouldReturnOnlyOwnOrganizationQuotations() {
 
         authenticate(SUPPLIER_EMAIL, supplierUser);
         authorizeSupplier(SUPPLIER_EMAIL);
 
-        stubSupplierOrganization();
+
         stubSupplierId();
-        stubOtherSupplierOrganization();
         stubBuyerOrganization();
         stubActiveRelationship();
-
-
-
 
         Quotation otherQuotation = new Quotation(
                 procurementRequest,
@@ -584,8 +604,10 @@ class QuotationServiceTest {
                 )).thenReturn(Optional.of(relationship));
 
         when(quotationRepository
-                .findByProcurementRequest_Id(PROCUREMENT_REQUEST_ID))
-                .thenReturn(List.of(quotation, otherQuotation));
+                .findByProcurementRequest_IdAndSupplier_IdIn(
+                        PROCUREMENT_REQUEST_ID,
+                        List.of(SUPPLIER_ID)
+                )).thenReturn(List.of(quotation));
 
         List<Quotation> result =
                 quotationService.getQuotationsByProcurementRequest(
@@ -596,6 +618,98 @@ class QuotationServiceTest {
 
         assertEquals(1, result.size());
         assertSame(quotation, result.get(0));
+    }
+
+    @Test
+    void getQuotationsByProcurementRequest_shouldExcludeProfilesWithoutActiveRelationship() {
+
+        authenticate(SUPPLIER_EMAIL, supplierUser);
+        authorizeSupplier(SUPPLIER_EMAIL);
+
+
+        stubSupplierId();
+        stubBuyerOrganization();
+        stubActiveRelationship();
+
+        Supplier secondSupplier = mock(Supplier.class);
+        when(secondSupplier.getId()).thenReturn(OTHER_SUPPLIER_ID);
+
+
+        BuyerSupplierRelationship pendingRelationship =
+                mock(BuyerSupplierRelationship.class);
+
+        when(pendingRelationship.getStatus())
+                .thenReturn(RelationshipStatus.PENDING);
+
+        Quotation secondQuotation = new Quotation(
+                procurementRequest,
+                secondSupplier,
+                new BigDecimal("135.00"),
+                60,
+                LocalDate.now().plusDays(15)
+        );
+
+        when(procurementRequestRepository.findById(PROCUREMENT_REQUEST_ID))
+                .thenReturn(Optional.of(procurementRequest));
+
+        when(supplierRepository.findAllByOrganization_Id(
+                SUPPLIER_ORGANIZATION_ID
+        )).thenReturn(List.of(supplier, secondSupplier));
+
+        when(relationshipRepository.findByBuyerOrganization_IdAndSupplier_Id(
+                BUYER_ORGANIZATION_ID,
+                SUPPLIER_ID
+        )).thenReturn(Optional.of(relationship));
+
+        when(relationshipRepository.findByBuyerOrganization_IdAndSupplier_Id(
+                BUYER_ORGANIZATION_ID,
+                OTHER_SUPPLIER_ID
+        )).thenReturn(Optional.of(pendingRelationship));
+
+        when(quotationRepository
+                .findByProcurementRequest_IdAndSupplier_IdIn(
+                        PROCUREMENT_REQUEST_ID,
+                        List.of(SUPPLIER_ID)
+                )).thenReturn(List.of(quotation));
+
+        List<Quotation> result =
+                quotationService.getQuotationsByProcurementRequest(
+                        PROCUREMENT_REQUEST_ID,
+                        SUPPLIER_EMAIL,
+                        SUPPLIER_ORGANIZATION_ID
+                );
+
+        assertEquals(1, result.size());
+        assertSame(quotation, result.get(0));
+    }
+
+    @Test
+    void getQuotationsByProcurementRequest_supplierOrganizationWithoutProfiles_shouldBeForbidden() {
+
+        authenticate(SUPPLIER_EMAIL, supplierUser);
+        authorizeSupplier(SUPPLIER_EMAIL);
+        stubBuyerOrganization();
+
+        when(procurementRequestRepository.findById(PROCUREMENT_REQUEST_ID))
+                .thenReturn(Optional.of(procurementRequest));
+
+        when(supplierRepository.findAllByOrganization_Id(
+                SUPPLIER_ORGANIZATION_ID
+        )).thenReturn(List.of());
+
+        assertStatus(
+                HttpStatus.FORBIDDEN,
+                () -> quotationService.getQuotationsByProcurementRequest(
+                        PROCUREMENT_REQUEST_ID,
+                        SUPPLIER_EMAIL,
+                        SUPPLIER_ORGANIZATION_ID
+                )
+        );
+
+        verify(quotationRepository, never())
+                .findByProcurementRequest_Id(any());
+
+        verifyNoInteractions(relationshipRepository);
     }
 
     @Test
@@ -686,6 +800,26 @@ class QuotationServiceTest {
     }
 
     @Test
+    void getQuotationById_withUnknownQuotation_shouldReturnNotFound() {
+
+        authenticate(BUYER_EMAIL, buyerUser);
+
+        when(quotationRepository.findById(QUOTATION_ID))
+                .thenReturn(Optional.empty());
+
+        assertStatus(
+                HttpStatus.NOT_FOUND,
+                () -> quotationService.getQuotationById(
+                        QUOTATION_ID,
+                        BUYER_EMAIL
+                )
+        );
+
+        verify(authorizationService, never())
+                .requireOrganizationCapability(any(), any(), any());
+    }
+
+    @Test
     void getQuotationById_withBuyerCapability_shouldSucceed() {
 
         authenticate(BUYER_EMAIL, buyerUser);
@@ -768,6 +902,37 @@ class QuotationServiceTest {
                         QUOTATION_ID,
                         SUPPLIER_EMAIL
                 )
+        );
+    }
+    @Test
+    void getQuotationById_whenBuyerAuthorizationFailsWithNonForbiddenError_shouldNotFallbackToSupplier() {
+
+        authenticate(SUPPLIER_EMAIL, supplierUser);
+
+        stubBuyerOrganization();
+        stubSupplierOrganization();
+
+        when(quotationRepository.findById(QUOTATION_ID))
+                .thenReturn(Optional.of(quotation));
+
+        when(authorizationService.requireOrganizationCapability(
+                SUPPLIER_EMAIL,
+                BUYER_ORGANIZATION_ID,
+                OrganizationCapability.BUYER
+        )).thenThrow(new ResponseStatusException(HttpStatus.UNAUTHORIZED));
+
+        assertStatus(
+                HttpStatus.UNAUTHORIZED,
+                () -> quotationService.getQuotationById(
+                        QUOTATION_ID,
+                        SUPPLIER_EMAIL
+                )
+        );
+
+        verify(authorizationService, never()).requireOrganizationCapability(
+                SUPPLIER_EMAIL,
+                SUPPLIER_ORGANIZATION_ID,
+                OrganizationCapability.SUPPLIER
         );
     }
 

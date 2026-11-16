@@ -190,21 +190,21 @@ public class QuotationService {
             );
         }
 
-        boolean hasActiveRelationship = suppliers.stream()
-                .map(Supplier::getId)
-                .map(supplierId ->
-                        relationshipRepository
-                                .findByBuyerOrganization_IdAndSupplier_Id(
-                                        buyerOrganizationId,
-                                        supplierId
-                                )
+        List<Long> activeSupplierIds = suppliers.stream()
+                .filter(supplier -> relationshipRepository
+                        .findByBuyerOrganization_IdAndSupplier_Id(
+                                buyerOrganizationId,
+                                supplier.getId()
+                        )
+                        .map(relationship ->
+                                relationship.getStatus() == RelationshipStatus.ACTIVE
+                        )
+                        .orElse(false)
                 )
-                .flatMap(java.util.Optional::stream)
-                .anyMatch(relationship ->
-                        relationship.getStatus() == RelationshipStatus.ACTIVE
-                );
+                .map(Supplier::getId)
+                .toList();
 
-        if (!hasActiveRelationship) {
+        if (activeSupplierIds.isEmpty()) {
             throw new ResponseStatusException(
                     HttpStatus.FORBIDDEN,
                     "Your organization does not have an active relationship with this buyer"
@@ -212,15 +212,10 @@ public class QuotationService {
         }
 
         return quotationRepository
-                .findByProcurementRequest_Id(procurementRequestId)
-                .stream()
-                .filter(quotation ->
-                        quotation.getSupplier()
-                                .getOrganization()
-                                .getId()
-                                .equals(organizationId)
-                )
-                .toList();
+                .findByProcurementRequest_IdAndSupplier_IdIn(
+                        procurementRequestId,
+                        activeSupplierIds
+                );
     }
 
     @Transactional(readOnly = true)

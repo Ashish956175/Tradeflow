@@ -60,6 +60,13 @@ class ProcurementRequestServiceTest {
                 .thenReturn(organization);
         lenient().when(organization.getId())
                 .thenReturn(ORGANIZATION_ID);
+        User buyer = mock(User.class);
+
+        lenient().when(authorizationService.getAuthenticatedUser(EMAIL))
+                .thenReturn(buyer);
+
+        lenient().when(buyer.getRole())
+                .thenReturn(UserRole.BUYER);
     }
 
     @Test
@@ -276,4 +283,84 @@ class ProcurementRequestServiceTest {
                 )
         );
     }
+
+    @Test
+    void createProcurementRequest_shouldRejectPlatformAdmin() {
+        User admin = mock(User.class);
+
+        ProcurementRequestRequest request = new ProcurementRequestRequest(
+                PRODUCT_ID,
+                5,
+                new BigDecimal("12.50"),
+                "Pune delivery address",
+                LocalDate.now().plusDays(5)
+        );
+
+        when(authorizationService.getAuthenticatedUser(EMAIL))
+                .thenReturn(admin);
+        when(admin.getRole()).thenReturn(UserRole.ADMIN);
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> procurementRequestService.createProcurementRequest(
+                        request,
+                        EMAIL,
+                        ORGANIZATION_ID
+                )
+        );
+
+        assertEquals(HttpStatus.FORBIDDEN, exception.getStatusCode());
+
+        verify(authorizationService, never())
+                .requireOrganizationCapability(any(), any(), any());
+
+        verifyNoInteractions(productRepository);
+        verify(procurementRequestRepository, never())
+                .save(any(ProcurementRequest.class));
+    }
+
+    @Test
+    void getMyProcurementRequests_shouldRejectPlatformAdmin() {
+        User admin = mock(User.class);
+
+        when(authorizationService.getAuthenticatedUser(EMAIL))
+                .thenReturn(admin);
+        when(admin.getRole()).thenReturn(UserRole.ADMIN);
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> procurementRequestService.getMyProcurementRequests(
+                        EMAIL,
+                        ORGANIZATION_ID
+                )
+        );
+
+        assertEquals(HttpStatus.FORBIDDEN, exception.getStatusCode());
+
+        verify(authorizationService, never())
+                .requireOrganizationCapability(any(), any(), any());
+
+        verifyNoInteractions(procurementRequestRepository);
+    }
+
+    @Test
+    void getProcurementRequestById_shouldReturnNotFoundWhenRequestDoesNotExist() {
+
+        when(procurementRequestRepository.findById(REQUEST_ID))
+                .thenReturn(Optional.empty());
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> procurementRequestService.getProcurementRequestById(
+                        REQUEST_ID,
+                        EMAIL
+                )
+        );
+
+        assertEquals(HttpStatus.NOT_FOUND, exception.getStatusCode());
+
+        verify(authorizationService, never())
+                .requireOrganizationCapability(any(), any(), any());
+    }
+
 }
