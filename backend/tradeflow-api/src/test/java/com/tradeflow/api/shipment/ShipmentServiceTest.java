@@ -141,6 +141,7 @@ class ShipmentServiceTest {
 
         when(purchaseOrderRepository.findById(ORDER_ID))
                 .thenReturn(Optional.of(purchaseOrder));
+
     }
 
     /**
@@ -331,6 +332,69 @@ class ShipmentServiceTest {
     }
 
     @Test
+    void createShipment_shouldRejectDuplicatePurchaseOrder() {
+
+        mockAuthenticatedSupplier();
+        mockPurchaseOrderLookup();
+        when(purchaseOrder.getId()).thenReturn(ORDER_ID);
+        mockSupplierCapability();
+
+        when(purchaseOrder.getStatus()).thenReturn(OrderStatus.SHIPPED);
+
+        when(shipmentRepository.existsByPurchaseOrder_Id(ORDER_ID))
+                .thenReturn(true);
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> shipmentService.createShipment(
+                        shipmentRequest,
+                        SUPPLIER_EMAIL
+                )
+        );
+
+        assertEquals(409, exception.getStatusCode().value());
+
+        verify(shipmentRepository, never()).save(any());
+        verify(shipmentRepository, never()).existsByTrackingNumber(any());
+    }
+
+    @Test
+    void createShipment_shouldRejectDuplicateTrackingNumber() {
+
+        mockAuthenticatedSupplier();
+        mockPurchaseOrderLookup();
+        when(purchaseOrder.getId()).thenReturn(ORDER_ID);
+        mockSupplierCapability();
+
+        when(purchaseOrder.getStatus()).thenReturn(OrderStatus.SHIPPED);
+
+        when(shipmentRepository.existsByPurchaseOrder_Id(ORDER_ID))
+                .thenReturn(false);
+
+        when(shipmentRepository.existsByTrackingNumber("TF-NEW-TRACK-001"))
+                .thenReturn(true);
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> shipmentService.createShipment(
+                        shipmentRequest,
+                        SUPPLIER_EMAIL
+                )
+        );
+
+        assertEquals(409, exception.getStatusCode().value());
+
+        verify(shipmentRepository).existsByPurchaseOrder_Id(ORDER_ID);
+
+        verify(shipmentRepository)
+                .existsByTrackingNumber("TF-NEW-TRACK-001");
+
+        verify(shipmentRepository, never()).save(any());
+    }
+
+
+
+    @Test
     void createShipment_shouldRejectPlatformAdmin() {
 
         when(membershipAuthorizationService.getAuthenticatedUser(
@@ -411,6 +475,31 @@ class ShipmentServiceTest {
     // ---------------------------------------------------------
     // Read shipment by ID
     // ---------------------------------------------------------
+
+    @Test
+    void getShipmentById_shouldRejectMissingShipment() {
+
+        when(membershipAuthorizationService.getAuthenticatedUser(
+                BUYER_EMAIL
+        )).thenReturn(buyer);
+
+        when(shipmentRepository.findById(SHIPMENT_ID))
+                .thenReturn(Optional.empty());
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> shipmentService.getShipmentById(
+                        SHIPMENT_ID,
+                        BUYER_EMAIL
+                )
+        );
+
+        assertEquals(404, exception.getStatusCode().value());
+        assertEquals("Shipment not found", exception.getReason());
+
+        verify(membershipAuthorizationService, never())
+                .requireOrganizationCapability(any(), any(), any());
+    }
 
     @Test
     void getShipmentById_shouldAllowBuyerOrganization() {
@@ -503,6 +592,32 @@ class ShipmentServiceTest {
     // ---------------------------------------------------------
 
     @Test
+    void getShipmentByTrackingNumber_shouldRejectMissingShipment() {
+
+        when(membershipAuthorizationService.getAuthenticatedUser(
+                BUYER_EMAIL
+        )).thenReturn(buyer);
+
+        when(shipmentRepository.findByTrackingNumber(
+                "TF-MISSING-TRACK-001"
+        )).thenReturn(Optional.empty());
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> shipmentService.getShipmentByTrackingNumber(
+                        "TF-MISSING-TRACK-001",
+                        BUYER_EMAIL
+                )
+        );
+
+        assertEquals(404, exception.getStatusCode().value());
+        assertEquals("Shipment not found", exception.getReason());
+
+        verify(membershipAuthorizationService, never())
+                .requireOrganizationCapability(any(), any(), any());
+    }
+
+    @Test
     void getShipmentByTrackingNumber_shouldAllowAuthorizedBuyer() {
 
         mockAuthenticatedBuyer();
@@ -518,6 +633,57 @@ class ShipmentServiceTest {
         );
 
         assertSame(shipment, result);
+    }
+
+    @Test
+    void getShipmentByTrackingNumber_shouldAllowAuthorizedSupplier() {
+
+        mockAuthenticatedSupplier();
+        mockShipmentReadBySupplier();
+
+        when(shipmentRepository.findByTrackingNumber(
+                "TF-TEST-TRACK-001"
+        )).thenReturn(Optional.of(shipment));
+
+        Shipment result = shipmentService.getShipmentByTrackingNumber(
+                "TF-TEST-TRACK-001",
+                SUPPLIER_EMAIL
+        );
+
+        assertSame(shipment, result);
+
+        verify(membershipAuthorizationService)
+                .requireOrganizationCapability(
+                        SUPPLIER_EMAIL,
+                        SUPPLIER_ORGANIZATION_ID,
+                        OrganizationCapability.SUPPLIER
+                );
+    }
+
+    @Test
+    void getShipmentByTrackingNumber_shouldAllowPlatformAdmin() {
+
+        when(membershipAuthorizationService.getAuthenticatedUser(
+                ADMIN_EMAIL
+        )).thenReturn(admin);
+
+        when(shipmentRepository.findByTrackingNumber(
+                "TF-TEST-TRACK-001"
+        )).thenReturn(Optional.of(shipment));
+
+        Shipment result = shipmentService.getShipmentByTrackingNumber(
+                "TF-TEST-TRACK-001",
+                ADMIN_EMAIL
+        );
+
+        assertSame(shipment, result);
+
+        verify(membershipAuthorizationService, never())
+                .requireOrganizationCapability(
+                        any(),
+                        any(),
+                        any()
+                );
     }
 
     @Test
@@ -541,9 +707,64 @@ class ShipmentServiceTest {
         assertEquals(403, exception.getStatusCode().value());
     }
 
+
+
     // ---------------------------------------------------------
     // Read shipment by purchase order ID
     // ---------------------------------------------------------
+
+    @Test
+    void getShipmentByOrderId_shouldRejectMissingPurchaseOrder() {
+
+        mockAuthenticatedBuyer();
+
+        when(purchaseOrderRepository.findById(ORDER_ID))
+                .thenReturn(Optional.empty());
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> shipmentService.getShipmentByOrderId(
+                        ORDER_ID,
+                        BUYER_EMAIL
+                )
+        );
+
+        assertEquals(404, exception.getStatusCode().value());
+
+        assertEquals(
+                "Purchase order not found",
+                exception.getReason()
+        );
+
+        verify(shipmentRepository, never())
+                .findByPurchaseOrder_Id(any());
+    }
+
+    @Test
+    void getShipmentByOrderId_shouldRejectMissingShipment() {
+
+        mockAuthenticatedBuyer();
+        mockPurchaseOrderLookup();
+        mockShipmentReadByBuyer();
+
+        when(shipmentRepository.findByPurchaseOrder_Id(ORDER_ID))
+                .thenReturn(Optional.empty());
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> shipmentService.getShipmentByOrderId(
+                        ORDER_ID,
+                        BUYER_EMAIL
+                )
+        );
+
+        assertEquals(404, exception.getStatusCode().value());
+
+        assertEquals(
+                "Shipment not found for this purchase order",
+                exception.getReason()
+        );
+    }
 
     @Test
     void getShipmentByOrderId_shouldAllowAuthorizedBuyer() {
@@ -561,6 +782,61 @@ class ShipmentServiceTest {
         );
 
         assertSame(shipment, result);
+    }
+    @Test
+    void getShipmentByOrderId_shouldAllowAuthorizedSupplier() {
+
+        mockAuthenticatedSupplier();
+        mockPurchaseOrderLookup();
+        mockShipmentReadBySupplier();
+
+        when(shipmentRepository.findByPurchaseOrder_Id(ORDER_ID))
+                .thenReturn(Optional.of(shipment));
+
+        Shipment result = shipmentService.getShipmentByOrderId(
+                ORDER_ID,
+                SUPPLIER_EMAIL
+        );
+
+        assertSame(shipment, result);
+
+        verify(membershipAuthorizationService)
+                .requireOrganizationCapability(
+                        SUPPLIER_EMAIL,
+                        SUPPLIER_ORGANIZATION_ID,
+                        OrganizationCapability.SUPPLIER
+                );
+
+        verify(shipmentRepository).findByPurchaseOrder_Id(ORDER_ID);
+    }
+
+    @Test
+    void getShipmentByOrderId_shouldAllowPlatformAdmin() {
+
+        when(membershipAuthorizationService.getAuthenticatedUser(
+                ADMIN_EMAIL
+        )).thenReturn(admin);
+
+        mockPurchaseOrderLookup();
+
+        when(shipmentRepository.findByPurchaseOrder_Id(ORDER_ID))
+                .thenReturn(Optional.of(shipment));
+
+        Shipment result = shipmentService.getShipmentByOrderId(
+                ORDER_ID,
+                ADMIN_EMAIL
+        );
+
+        assertSame(shipment, result);
+
+        verify(membershipAuthorizationService, never())
+                .requireOrganizationCapability(
+                        any(),
+                        any(),
+                        any()
+                );
+
+        verify(shipmentRepository).findByPurchaseOrder_Id(ORDER_ID);
     }
 
     @Test
@@ -673,6 +949,53 @@ class ShipmentServiceTest {
         );
 
         assertEquals(ShipmentStatus.PICKED_UP, result.getStatus());
+
+        verify(shipmentRepository).save(shipment);
+    }
+
+    @Test
+    void updateShipmentStatus_shouldAllowCreatedToFailedDelivery() {
+
+        mockAuthenticatedSupplier();
+        mockShipmentLookup();
+        mockSupplierCapability();
+
+        when(shipmentRepository.save(any(Shipment.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        Shipment result = shipmentService.updateShipmentStatus(
+                SHIPMENT_ID,
+                ShipmentStatus.FAILED_DELIVERY,
+                SUPPLIER_EMAIL
+        );
+
+        assertEquals(
+                ShipmentStatus.FAILED_DELIVERY,
+                result.getStatus()
+        );
+
+        verify(shipmentRepository).save(shipment);
+    }
+
+    @Test
+    void updateShipmentStatus_shouldAllowPickedUpToInTransit() {
+
+        shipment.setStatus(ShipmentStatus.PICKED_UP);
+
+        mockAuthenticatedSupplier();
+        mockShipmentLookup();
+        mockSupplierCapability();
+
+        when(shipmentRepository.save(any(Shipment.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        Shipment result = shipmentService.updateShipmentStatus(
+                SHIPMENT_ID,
+                ShipmentStatus.IN_TRANSIT,
+                SUPPLIER_EMAIL
+        );
+
+        assertEquals(ShipmentStatus.IN_TRANSIT, result.getStatus());
 
         verify(shipmentRepository).save(shipment);
     }
@@ -820,6 +1143,181 @@ class ShipmentServiceTest {
         verify(shipmentRepository, never()).findById(any());
         verify(shipmentRepository, never()).save(any());
     }
+
+    @Test
+    void updateShipmentStatus_shouldAllowPickedUpToFailedDelivery() {
+
+        shipment.setStatus(ShipmentStatus.PICKED_UP);
+
+        mockAuthenticatedSupplier();
+        mockShipmentLookup();
+        mockSupplierCapability();
+
+        when(shipmentRepository.save(any(Shipment.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        Shipment result = shipmentService.updateShipmentStatus(
+                SHIPMENT_ID,
+                ShipmentStatus.FAILED_DELIVERY,
+                SUPPLIER_EMAIL
+        );
+
+        assertEquals(ShipmentStatus.FAILED_DELIVERY, result.getStatus());
+
+        verify(shipmentRepository).save(shipment);
+    }
+
+    @Test
+    void updateShipmentStatus_shouldAllowInTransitToOutForDelivery() {
+
+        shipment.setStatus(ShipmentStatus.IN_TRANSIT);
+
+        mockAuthenticatedSupplier();
+        mockShipmentLookup();
+        mockSupplierCapability();
+
+        when(shipmentRepository.save(any(Shipment.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        Shipment result = shipmentService.updateShipmentStatus(
+                SHIPMENT_ID,
+                ShipmentStatus.OUT_FOR_DELIVERY,
+                SUPPLIER_EMAIL
+        );
+
+        assertEquals(
+                ShipmentStatus.OUT_FOR_DELIVERY,
+                result.getStatus()
+        );
+
+        verify(shipmentRepository).save(shipment);
+    }
+
+    @Test
+    void updateShipmentStatus_shouldAllowInTransitToFailedDelivery() {
+
+        shipment.setStatus(ShipmentStatus.IN_TRANSIT);
+
+        mockAuthenticatedSupplier();
+        mockShipmentLookup();
+        mockSupplierCapability();
+
+        when(shipmentRepository.save(any(Shipment.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        Shipment result = shipmentService.updateShipmentStatus(
+                SHIPMENT_ID,
+                ShipmentStatus.FAILED_DELIVERY,
+                SUPPLIER_EMAIL
+        );
+
+        assertEquals(
+                ShipmentStatus.FAILED_DELIVERY,
+                result.getStatus()
+        );
+
+        verify(shipmentRepository).save(shipment);
+    }
+
+    @Test
+    void updateShipmentStatus_shouldAllowOutForDeliveryToFailedDelivery() {
+
+        shipment.setStatus(ShipmentStatus.OUT_FOR_DELIVERY);
+
+        mockAuthenticatedSupplier();
+        mockShipmentLookup();
+        mockSupplierCapability();
+
+        when(shipmentRepository.save(any(Shipment.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        Shipment result = shipmentService.updateShipmentStatus(
+                SHIPMENT_ID,
+                ShipmentStatus.FAILED_DELIVERY,
+                SUPPLIER_EMAIL
+        );
+
+        assertEquals(
+                ShipmentStatus.FAILED_DELIVERY,
+                result.getStatus()
+        );
+
+        verify(shipmentRepository).save(shipment);
+    }
+
+    @Test
+    void updateShipmentStatus_shouldAllowFailedDeliveryToInTransit() {
+
+        shipment.setStatus(ShipmentStatus.FAILED_DELIVERY);
+
+        mockAuthenticatedSupplier();
+        mockShipmentLookup();
+        mockSupplierCapability();
+
+        when(shipmentRepository.save(any(Shipment.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        Shipment result = shipmentService.updateShipmentStatus(
+                SHIPMENT_ID,
+                ShipmentStatus.IN_TRANSIT,
+                SUPPLIER_EMAIL
+        );
+
+        assertEquals(ShipmentStatus.IN_TRANSIT, result.getStatus());
+
+        verify(shipmentRepository).save(shipment);
+    }
+
+    @Test
+    void updateShipmentStatus_shouldAllowFailedDeliveryToReturned() {
+
+        shipment.setStatus(ShipmentStatus.FAILED_DELIVERY);
+
+        mockAuthenticatedSupplier();
+        mockShipmentLookup();
+        mockSupplierCapability();
+
+        when(shipmentRepository.save(any(Shipment.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        Shipment result = shipmentService.updateShipmentStatus(
+                SHIPMENT_ID,
+                ShipmentStatus.RETURNED,
+                SUPPLIER_EMAIL
+        );
+
+        assertEquals(ShipmentStatus.RETURNED, result.getStatus());
+
+        verify(shipmentRepository).save(shipment);
+    }
+
+    @Test
+    void updateShipmentStatus_shouldRejectTransitionFromReturned() {
+
+        shipment.setStatus(ShipmentStatus.RETURNED);
+
+        mockAuthenticatedSupplier();
+        mockShipmentLookup();
+        mockSupplierCapability();
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> shipmentService.updateShipmentStatus(
+                        SHIPMENT_ID,
+                        ShipmentStatus.IN_TRANSIT,
+                        SUPPLIER_EMAIL
+                )
+        );
+
+        assertEquals(409, exception.getStatusCode().value());
+        assertEquals(
+                "Invalid shipment status transition from RETURNED to IN_TRANSIT",
+                exception.getReason()
+        );
+
+        verify(shipmentRepository, never()).save(any(Shipment.class));
+    }
+
     @Test
     void getShipmentsByStatus_shouldRejectNonAdmin() {
 

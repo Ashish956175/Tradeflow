@@ -3,9 +3,9 @@ package com.tradeflow.api.payment;
 import com.tradeflow.api.order.OrderStatus;
 import com.tradeflow.api.order.PurchaseOrder;
 import com.tradeflow.api.order.PurchaseOrderRepository;
-import com.tradeflow.api.organization.Organization;
+import com.tradeflow.api.organization.OrganizationCapability;
+import com.tradeflow.api.security.MembershipAuthorizationService;
 import com.tradeflow.api.user.User;
-import com.tradeflow.api.user.UserRepository;
 import com.tradeflow.api.user.UserRole;
 
 import org.springframework.http.HttpStatus;
@@ -21,16 +21,16 @@ public class PaymentService {
 
     private final PaymentRepository paymentRepository;
     private final PurchaseOrderRepository purchaseOrderRepository;
-    private final UserRepository userRepository;
+    private final MembershipAuthorizationService membershipAuthorizationService;
 
     public PaymentService(
             PaymentRepository paymentRepository,
             PurchaseOrderRepository purchaseOrderRepository,
-            UserRepository userRepository
+            MembershipAuthorizationService membershipAuthorizationService
     ) {
         this.paymentRepository = paymentRepository;
         this.purchaseOrderRepository = purchaseOrderRepository;
-        this.userRepository = userRepository;
+        this.membershipAuthorizationService = membershipAuthorizationService;
     }
 
     // Create payment for a confirmed order owned by the buyer.
@@ -39,8 +39,16 @@ public class PaymentService {
             PaymentRequest request,
             String authenticatedEmail
     ) {
-        User user = getAuthenticatedUser(authenticatedEmail);
-        requireRole(user, UserRole.BUYER);
+        User user = membershipAuthorizationService
+                .getAuthenticatedUser(authenticatedEmail);
+
+        // Platform administrators cannot create payments on behalf of buyers.
+        if (user.getRole() == UserRole.ADMIN) {
+            throw new ResponseStatusException(
+                    HttpStatus.FORBIDDEN,
+                    "You do not have permission to perform this action"
+            );
+        }
 
         PurchaseOrder order = purchaseOrderRepository
                 .findById(request.purchaseOrderId())
@@ -49,7 +57,17 @@ public class PaymentService {
                         "Purchase order not found"
                 ));
 
-        verifyBuyerOwnsOrder(user, order);
+        Long buyerOrganizationId = order.getQuotation()
+                .getProcurementRequest()
+                .getBuyerOrganization()
+                .getId();
+
+        // Require active BUYER capability in the buyer organization.
+        membershipAuthorizationService.requireOrganizationCapability(
+                authenticatedEmail,
+                buyerOrganizationId,
+                OrganizationCapability.BUYER
+        );
 
         if (order.getStatus() != OrderStatus.CONFIRMED) {
             throw new ResponseStatusException(
@@ -76,13 +94,14 @@ public class PaymentService {
         return PaymentResponse.from(savedPayment);
     }
 
-    // Only administrators can retrieve all payments.
+    // Only platform administrators can retrieve all payments.
     @Transactional(readOnly = true)
     public List<PaymentResponse> getAllPayments(
             String authenticatedEmail
     ) {
-        User user = getAuthenticatedUser(authenticatedEmail);
-        requireRole(user, UserRole.ADMIN);
+        membershipAuthorizationService.requirePlatformAdmin(
+                authenticatedEmail
+        );
 
         return paymentRepository.findAll()
                 .stream()
@@ -96,11 +115,16 @@ public class PaymentService {
             Long paymentId,
             String authenticatedEmail
     ) {
-        User user = getAuthenticatedUser(authenticatedEmail);
+        User user = membershipAuthorizationService
+                .getAuthenticatedUser(authenticatedEmail);
 
         Payment payment = findPayment(paymentId);
 
-        verifyPaymentAccess(user, payment.getPurchaseOrder());
+        verifyPaymentAccess(
+                authenticatedEmail,
+                user,
+                payment.getPurchaseOrder()
+        );
 
         return PaymentResponse.from(payment);
     }
@@ -111,7 +135,8 @@ public class PaymentService {
             Long purchaseOrderId,
             String authenticatedEmail
     ) {
-        User user = getAuthenticatedUser(authenticatedEmail);
+        User user = membershipAuthorizationService
+                .getAuthenticatedUser(authenticatedEmail);
 
         PurchaseOrder order = purchaseOrderRepository
                 .findById(purchaseOrderId)
@@ -120,7 +145,11 @@ public class PaymentService {
                         "Purchase order not found"
                 ));
 
-        verifyPaymentAccess(user, order);
+        verifyPaymentAccess(
+                authenticatedEmail,
+                user,
+                order
+        );
 
         Payment payment = paymentRepository
                 .findByPurchaseOrder_Id(purchaseOrderId)
@@ -132,14 +161,15 @@ public class PaymentService {
         return PaymentResponse.from(payment);
     }
 
-    // Only administrators can filter payments by status.
+    // Only platform administrators can filter payments by status.
     @Transactional(readOnly = true)
     public List<PaymentResponse> getPaymentsByStatus(
             PaymentStatus status,
             String authenticatedEmail
     ) {
-        User user = getAuthenticatedUser(authenticatedEmail);
-        requireRole(user, UserRole.ADMIN);
+        membershipAuthorizationService.requirePlatformAdmin(
+                authenticatedEmail
+        );
 
         return paymentRepository.findByStatus(status)
                 .stream()
@@ -153,8 +183,9 @@ public class PaymentService {
             Long paymentId,
             String authenticatedEmail
     ) {
-        User user = getAuthenticatedUser(authenticatedEmail);
-        requireRole(user, UserRole.ADMIN);
+        membershipAuthorizationService.requirePlatformAdmin(
+                authenticatedEmail
+        );
 
         Payment payment = findPayment(paymentId);
 
@@ -173,8 +204,9 @@ public class PaymentService {
             Long paymentId,
             String authenticatedEmail
     ) {
-        User user = getAuthenticatedUser(authenticatedEmail);
-        requireRole(user, UserRole.ADMIN);
+        membershipAuthorizationService.requirePlatformAdmin(
+                authenticatedEmail
+        );
 
         Payment payment = findPayment(paymentId);
 
@@ -196,112 +228,60 @@ public class PaymentService {
                 ));
     }
 
-    // Retrieve authenticated and enabled user.
-    private User getAuthenticatedUser(String email) {
-
-        String normalizedEmail = email.trim()
-                .toLowerCase(Locale.ROOT);
-
-        User user = userRepository.findByEmail(normalizedEmail)
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.UNAUTHORIZED,
-                        "Authenticated user not found"
-                ));
-
-        if (!user.isEnabled()) {
-            throw new ResponseStatusException(
-                    HttpStatus.FORBIDDEN,
-                    "Your account is disabled"
-            );
-        }
-
-        return user;
-    }
-
-    // Verify user role.
-    private void requireRole(
-            User user,
-            UserRole requiredRole
-    ) {
-        if (user.getRole() != requiredRole) {
-            throw new ResponseStatusException(
-                    HttpStatus.FORBIDDEN,
-                    "You do not have permission to perform this action"
-            );
-        }
-    }
-
-    // Retrieve organization associated with the user.
-    private Organization requireOrganization(User user) {
-
-        Organization organization = user.getOrganization();
-
-        if (organization == null) {
-            throw new ResponseStatusException(
-                    HttpStatus.FORBIDDEN,
-                    "Your account is not associated with an organization"
-            );
-        }
-
-        return organization;
-    }
-
-    // Verify buyer owns the purchase order.
-    private void verifyBuyerOwnsOrder(
-            User user,
-            PurchaseOrder order
-    ) {
-        Organization buyerOrganization = requireOrganization(user);
-
-        Long orderBuyerOrganizationId = order.getQuotation()
-                .getProcurementRequest()
-                .getBuyerOrganization()
-                .getId();
-
-        if (!buyerOrganization.getId().equals(orderBuyerOrganizationId)) {
-            throw new ResponseStatusException(
-                    HttpStatus.FORBIDDEN,
-                    "You cannot create a payment for another buyer's order"
-            );
-        }
-    }
-
-    // Verify buyer, supplier or administrator can access the payment.
+    // Verify buyer, supplier or platform administrator can access the payment.
     private void verifyPaymentAccess(
+            String authenticatedEmail,
             User user,
             PurchaseOrder order
     ) {
 
-        // Administrators have unrestricted payment access.
+        // Platform administrators have unrestricted payment read access.
         if (user.getRole() == UserRole.ADMIN) {
             return;
         }
 
-        Organization organization = requireOrganization(user);
+        Long buyerOrganizationId = order.getQuotation()
+                .getProcurementRequest()
+                .getBuyerOrganization()
+                .getId();
 
-        // Buyer organization verification.
-        if (user.getRole() == UserRole.BUYER) {
+        Long supplierOrganizationId = order.getQuotation()
+                .getSupplier()
+                .getOrganization()
+                .getId();
 
-            Long buyerOrganizationId = order.getQuotation()
-                    .getProcurementRequest()
-                    .getBuyerOrganization()
-                    .getId();
+        // First, try BUYER capability in the buyer organization.
+        try {
+            membershipAuthorizationService.requireOrganizationCapability(
+                    authenticatedEmail,
+                    buyerOrganizationId,
+                    OrganizationCapability.BUYER
+            );
 
-            if (organization.getId().equals(buyerOrganizationId)) {
-                return;
+            return;
+
+        } catch (ResponseStatusException exception) {
+
+            // Only try supplier authorization when buyer authorization is denied.
+            if (exception.getStatusCode() != HttpStatus.FORBIDDEN) {
+                throw exception;
             }
         }
 
-        // Supplier organization verification.
-        if (user.getRole() == UserRole.SUPPLIER) {
+        // Next, try SUPPLIER capability in the supplier organization.
+        try {
+            membershipAuthorizationService.requireOrganizationCapability(
+                    authenticatedEmail,
+                    supplierOrganizationId,
+                    OrganizationCapability.SUPPLIER
+            );
 
-            Long supplierOrganizationId = order.getQuotation()
-                    .getSupplier()
-                    .getOrganization()
-                    .getId();
+            return;
 
-            if (organization.getId().equals(supplierOrganizationId)) {
-                return;
+        } catch (ResponseStatusException exception) {
+
+            if (exception.getStatusCode() != HttpStatus.FORBIDDEN) {
+                throw exception;
             }
         }
 

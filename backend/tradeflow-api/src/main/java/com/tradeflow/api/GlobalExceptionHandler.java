@@ -11,6 +11,8 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.dao.DataIntegrityViolationException;
+
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -106,6 +108,20 @@ public class GlobalExceptionHandler {
         );
     }
 
+    // Handle database integrity constraint violations
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ApiError> handleDataIntegrityViolation(
+            DataIntegrityViolationException exception,
+            HttpServletRequest request) {
+
+        return buildError(
+                HttpStatus.CONFLICT,
+                "The request conflicts with existing data.",
+                request,
+                Map.of()
+        );
+    }
+
     private ResponseEntity<ApiError> buildError(
             HttpStatus status,
             String message,
@@ -122,4 +138,5 @@ public class GlobalExceptionHandler {
 
         return ResponseEntity.status(status).body(error);
     }
+
 }
