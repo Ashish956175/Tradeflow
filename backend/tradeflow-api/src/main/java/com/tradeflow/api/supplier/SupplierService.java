@@ -7,13 +7,17 @@ import com.tradeflow.api.organization.OrganizationRepository;
 import com.tradeflow.api.security.MembershipAuthorizationService;
 import com.tradeflow.api.user.User;
 import com.tradeflow.api.user.UserRole;
+import java.util.Locale;
+
+import java.util.List;
+
 
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.util.List;
+
 
 @Service
 @Transactional(readOnly = true)
@@ -60,7 +64,7 @@ public class SupplierService {
 
         String normalizedEmail = request.email()
                 .trim()
-                .toLowerCase();
+                .toLowerCase(Locale.ROOT);
 
         if (supplierRepository.existsByOrganization_IdAndEmail(
                 organization.getId(),

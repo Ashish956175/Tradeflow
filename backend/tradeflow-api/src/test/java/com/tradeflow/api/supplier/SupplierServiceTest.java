@@ -449,4 +449,82 @@ class SupplierServiceTest {
                 any()
         );
     }
+
+    @Test
+    void createSupplier_forDifferentOrganization_shouldBeForbidden() {
+
+        Long differentOrganizationId = 20L;
+
+        authenticate(SUPPLIER_EMAIL, supplierUser);
+
+        when(authorizationService.requireOrganizationCapability(
+                SUPPLIER_EMAIL,
+                differentOrganizationId,
+                OrganizationCapability.SUPPLIER
+        )).thenThrow(new ResponseStatusException(
+                HttpStatus.FORBIDDEN,
+                "Organization membership not found"
+        ));
+
+        assertStatus(
+                HttpStatus.FORBIDDEN,
+                () -> supplierService.createSupplier(
+                        request,
+                        SUPPLIER_EMAIL,
+                        differentOrganizationId
+                )
+        );
+
+        verify(supplierRepository, never()).save(any());
+    }
+
+    @Test
+    void getSupplierById_fromDifferentOrganization_shouldBeForbidden() {
+
+        Long differentOrganizationId = 20L;
+
+        Organization differentOrganization = new Organization();
+        ReflectionTestUtils.setField(
+                differentOrganization,
+                "id",
+                differentOrganizationId
+        );
+
+        Supplier supplierFromDifferentOrganization = new Supplier();
+        ReflectionTestUtils.setField(
+                supplierFromDifferentOrganization,
+                "id",
+                40L
+        );
+        supplierFromDifferentOrganization.setOrganization(
+                differentOrganization
+        );
+
+        authenticate(SUPPLIER_EMAIL, supplierUser);
+
+        when(supplierRepository.findById(40L))
+                .thenReturn(Optional.of(supplierFromDifferentOrganization));
+
+        when(authorizationService.requireOrganizationCapability(
+                SUPPLIER_EMAIL,
+                differentOrganizationId,
+                OrganizationCapability.SUPPLIER
+        )).thenThrow(new ResponseStatusException(
+                HttpStatus.FORBIDDEN,
+                "Organization membership not found"
+        ));
+
+
+        assertStatus(
+
+                HttpStatus.FORBIDDEN,
+                () -> supplierService.getSupplierById(
+                        40L,
+                        SUPPLIER_EMAIL
+                )
+
+        );
+
+    }
+
 }
