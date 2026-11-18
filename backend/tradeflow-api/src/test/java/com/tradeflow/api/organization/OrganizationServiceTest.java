@@ -1,6 +1,5 @@
 package com.tradeflow.api.organization;
 
-
 import com.tradeflow.api.user.User;
 import com.tradeflow.api.user.UserRepository;
 import com.tradeflow.api.user.UserRole;
@@ -10,11 +9,11 @@ import com.tradeflow.api.membership.MembershipStatus;
 import com.tradeflow.api.membership.OrganizationMembership;
 import com.tradeflow.api.membership.OrganizationMembershipRepository;
 
-import org.mockito.ArgumentCaptor;
-
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+
+import org.mockito.ArgumentCaptor;
 
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -23,11 +22,10 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.util.Set;
-
 import java.lang.reflect.Field;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -60,9 +58,9 @@ class OrganizationServiceTest {
 
     @BeforeEach
     void setUp() {
-        buyer = createUser("buyer@example.com", UserRole.BUYER, true);
-        supplier = createUser("supplier@example.com", UserRole.SUPPLIER, true);
-        admin = createUser("admin@example.com", UserRole.ADMIN, true);
+        buyer = createUser(1L, "buyer@example.com", UserRole.BUYER, true);
+        supplier = createUser(2L, "supplier@example.com", UserRole.SUPPLIER, true);
+        admin = createUser(3L, "admin@example.com", UserRole.ADMIN, true);
     }
 
     // =====================================================
@@ -70,6 +68,7 @@ class OrganizationServiceTest {
     // =====================================================
 
     private User createUser(
+            Long id,
             String email,
             UserRole role,
             boolean enabled
@@ -82,6 +81,8 @@ class OrganizationServiceTest {
         );
 
         user.setEnabled(enabled);
+        setEntityId(user, id);
+
         return user;
     }
 
@@ -94,18 +95,26 @@ class OrganizationServiceTest {
         organization.setName(name);
         organization.setBusinessEmail(email);
 
-        try {
-            Field idField = Organization.class.getDeclaredField("id");
-            idField.setAccessible(true);
-            idField.set(organization, id);
-        } catch (ReflectiveOperationException exception) {
-            throw new IllegalStateException(
-                    "Unable to assign organization ID in test",
-                    exception
-            );
-        }
+        setEntityId(organization, id);
 
         return organization;
+    }
+
+    private OrganizationMembership createMembership(
+            User user,
+            Organization organization,
+            MembershipRole role,
+            MembershipStatus status
+    ) {
+        return new OrganizationMembership(
+                user,
+                organization,
+                role,
+                status,
+                status == MembershipStatus.ACTIVE
+                        ? java.time.LocalDateTime.now()
+                        : null
+        );
     }
 
     private OrganizationRequest validOrganizationRequest() {
@@ -133,6 +142,20 @@ class OrganizationServiceTest {
         );
     }
 
+    private OrganizationOnboardRequest onboardRequest(
+            String name,
+            String email,
+            OrganizationCapability... capabilities
+    ) {
+        return new OrganizationOnboardRequest(
+                name,
+                email,
+                "9876543210",
+                "Pune, Maharashtra",
+                Set.of(capabilities)
+        );
+    }
+
     private void authenticate(User user) {
         when(userRepository.findByEmail(user.getEmail()))
                 .thenReturn(Optional.of(user));
@@ -151,6 +174,19 @@ class OrganizationServiceTest {
                 expectedStatus.value(),
                 exception.getStatusCode().value()
         );
+    }
+
+    private void setEntityId(Object entity, Long id) {
+        try {
+            Field idField = entity.getClass().getDeclaredField("id");
+            idField.setAccessible(true);
+            idField.set(entity, id);
+        } catch (ReflectiveOperationException exception) {
+            throw new IllegalStateException(
+                    "Unable to assign entity ID in test",
+                    exception
+            );
+        }
     }
 
     // =====================================================
@@ -237,12 +273,9 @@ class OrganizationServiceTest {
         when(organizationRepository.save(any(Organization.class)))
                 .thenAnswer(invocation -> {
                     Organization organization = invocation.getArgument(0);
-                    setOrganizationId(organization, 10L);
+                    setEntityId(organization, 10L);
                     return organization;
                 });
-
-        when(userRepository.save(any(User.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
 
         OrganizationOnboardResponse result =
                 organizationService.onboardOrganization(
@@ -258,13 +291,7 @@ class OrganizationServiceTest {
         assertEquals(10L, result.organizationId());
         assertEquals("TradeFlow Retailers", result.organizationName());
 
-        assertNotNull(buyer.getOrganization());
-        assertEquals(
-                "retail@example.com",
-                buyer.getOrganization().getBusinessEmail()
-        );
-
-        // Verify organization capability persistence
+        // Verify organization capability persistence.
         ArgumentCaptor<OrganizationCapabilityEntity> capabilityCaptor =
                 ArgumentCaptor.forClass(OrganizationCapabilityEntity.class);
 
@@ -281,7 +308,7 @@ class OrganizationServiceTest {
                 capabilityCaptor.getValue().getOrganization().getId()
         );
 
-        // Verify capability audit persistence
+        // Verify capability audit persistence.
         ArgumentCaptor<OrganizationCapabilityAudit> auditCaptor =
                 ArgumentCaptor.forClass(OrganizationCapabilityAudit.class);
 
@@ -295,7 +322,7 @@ class OrganizationServiceTest {
         assertEquals(buyer, audit.getChangedBy());
         assertEquals("Organization onboarding", audit.getReason());
 
-        // Verify active OWNER membership
+        // Verify active OWNER membership.
         ArgumentCaptor<OrganizationMembership> membershipCaptor =
                 ArgumentCaptor.forClass(OrganizationMembership.class);
 
@@ -310,8 +337,9 @@ class OrganizationServiceTest {
         assertEquals(MembershipStatus.ACTIVE, membership.getStatus());
         assertNotNull(membership.getJoinedAt());
 
-    // Verify legacy user association is retained
-        verify(userRepository).save(buyer);
+        // Onboarding must not modify or save the legacy association.
+        assertNull(buyer.getOrganization());
+        verify(userRepository, never()).save(any(User.class));
     }
 
     @Test
@@ -325,12 +353,9 @@ class OrganizationServiceTest {
         when(organizationRepository.save(any(Organization.class)))
                 .thenAnswer(invocation -> {
                     Organization organization = invocation.getArgument(0);
-                    setOrganizationId(organization, 20L);
+                    setEntityId(organization, 20L);
                     return organization;
                 });
-
-        when(userRepository.save(any(User.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
 
         OrganizationOnboardResponse result =
                 organizationService.onboardOrganization(
@@ -340,9 +365,7 @@ class OrganizationServiceTest {
 
         assertEquals(20L, result.organizationId());
         assertEquals("TradeFlow Retailers", result.organizationName());
-        assertNotNull(supplier.getOrganization());
 
-        // Verify organization capability persistence
         ArgumentCaptor<OrganizationCapabilityEntity> capabilityCaptor =
                 ArgumentCaptor.forClass(OrganizationCapabilityEntity.class);
 
@@ -354,12 +377,12 @@ class OrganizationServiceTest {
                 capabilityCaptor.getValue().getCapability()
         );
 
+
         assertEquals(
                 20L,
                 capabilityCaptor.getValue().getOrganization().getId()
         );
 
-        // Verify capability audit persistence
         ArgumentCaptor<OrganizationCapabilityAudit> auditCaptor =
                 ArgumentCaptor.forClass(OrganizationCapabilityAudit.class);
 
@@ -373,7 +396,6 @@ class OrganizationServiceTest {
         assertEquals(supplier, audit.getChangedBy());
         assertEquals("Organization onboarding", audit.getReason());
 
-        // Verify active OWNER membership
         ArgumentCaptor<OrganizationMembership> membershipCaptor =
                 ArgumentCaptor.forClass(OrganizationMembership.class);
 
@@ -388,12 +410,12 @@ class OrganizationServiceTest {
         assertEquals(MembershipStatus.ACTIVE, membership.getStatus());
         assertNotNull(membership.getJoinedAt());
 
-        // Verify legacy association
-        verify(userRepository).save(supplier);
+        assertNull(supplier.getOrganization());
+        verify(userRepository, never()).save(any(User.class));
     }
 
     @Test
-    void onboardOrganization_shouldOnboardOrganizationWithBuyerAndSupplierCapabilities() {
+    void onboardOrganization_shouldSupportBuyerAndSupplierCapabilities() {
         authenticate(buyer);
 
         when(organizationRepository.existsByBusinessEmail(
@@ -403,12 +425,9 @@ class OrganizationServiceTest {
         when(organizationRepository.save(any(Organization.class)))
                 .thenAnswer(invocation -> {
                     Organization organization = invocation.getArgument(0);
-                    setOrganizationId(organization, 30L);
+                    setEntityId(organization, 30L);
                     return organization;
                 });
-
-        when(userRepository.save(any(User.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
 
         OrganizationOnboardResponse result =
                 organizationService.onboardOrganization(
@@ -421,9 +440,7 @@ class OrganizationServiceTest {
 
         assertEquals(30L, result.organizationId());
         assertEquals("TradeFlow Retailers", result.organizationName());
-        assertNotNull(buyer.getOrganization());
 
-        // Verify both organization capabilities
         ArgumentCaptor<OrganizationCapabilityEntity> capabilityCaptor =
                 ArgumentCaptor.forClass(OrganizationCapabilityEntity.class);
 
@@ -442,13 +459,11 @@ class OrganizationServiceTest {
                         capability.getCapability() == OrganizationCapability.SUPPLIER
                 ));
 
-        // Verify both capability audit records
         ArgumentCaptor<OrganizationCapabilityAudit> auditCaptor =
                 ArgumentCaptor.forClass(OrganizationCapabilityAudit.class);
 
         verify(organizationCapabilityAuditRepository, times(2))
                 .save(auditCaptor.capture());
-
         assertEquals(2, auditCaptor.getAllValues().size());
 
         assertTrue(auditCaptor.getAllValues().stream()
@@ -458,7 +473,6 @@ class OrganizationServiceTest {
                                 && "Organization onboarding".equals(audit.getReason())
                 ));
 
-        // Verify active OWNER membership
         ArgumentCaptor<OrganizationMembership> membershipCaptor =
                 ArgumentCaptor.forClass(OrganizationMembership.class);
 
@@ -473,8 +487,91 @@ class OrganizationServiceTest {
         assertEquals(MembershipStatus.ACTIVE, membership.getStatus());
         assertNotNull(membership.getJoinedAt());
 
-        // Verify legacy association
-        verify(userRepository).save(buyer);
+        assertNull(buyer.getOrganization());
+        verify(userRepository, never()).save(any(User.class));
+    }
+
+    @Test
+    void onboardOrganization_shouldAllowSameUserToOnboardMultipleOrganizations() {
+        authenticate(buyer);
+
+        Organization legacyOrganization = createOrganization(
+                5L,
+                "Legacy Organization",
+                "legacy@example.com"
+        );
+
+        buyer.setOrganization(legacyOrganization);
+
+        when(organizationRepository.existsByBusinessEmail(any(String.class)))
+                .thenReturn(false);
+
+        when(organizationRepository.save(any(Organization.class)))
+                .thenAnswer(new org.mockito.stubbing.Answer<Organization>() {
+                    private long nextId = 40L;
+
+                    @Override
+                    public Organization answer(
+                            org.mockito.invocation.InvocationOnMock invocation
+                    ) {
+                        Organization organization = invocation.getArgument(0);
+                        setEntityId(organization, nextId++);
+                        return organization;
+                    }
+                });
+
+        OrganizationOnboardResponse first =
+                organizationService.onboardOrganization(
+                        onboardRequest(
+                                "First Organization",
+                                "first@example.com",
+                                OrganizationCapability.BUYER
+                        ),
+                        buyer.getEmail()
+                );
+
+        OrganizationOnboardResponse second =
+                organizationService.onboardOrganization(
+                        onboardRequest(
+                                "Second Organization",
+                                "second@example.com",
+                                OrganizationCapability.SUPPLIER
+                        ),
+                        buyer.getEmail()
+                );
+
+        assertEquals(40L, first.organizationId());
+        assertEquals(41L, second.organizationId());
+
+        ArgumentCaptor<OrganizationMembership> membershipCaptor =
+                ArgumentCaptor.forClass(OrganizationMembership.class);
+
+        verify(organizationMembershipRepository, times(2))
+                .save(membershipCaptor.capture());
+
+        List<OrganizationMembership> memberships =
+                membershipCaptor.getAllValues();
+
+        assertEquals(2, memberships.size());
+
+        assertTrue(memberships.stream()
+                .allMatch(membership ->
+                        membership.getUser().equals(buyer)
+                                && membership.getMembershipRole() == MembershipRole.OWNER
+                                && membership.getStatus() == MembershipStatus.ACTIVE
+                ));
+
+        assertEquals(
+                Set.of(40L, 41L),
+                memberships.stream()
+                        .map(membership -> membership.getOrganization().getId())
+                        .collect(java.util.stream.Collectors.toSet())
+        );
+
+        // Existing legacy association must not be overwritten.
+        assertSame(legacyOrganization, buyer.getOrganization());
+
+        verify(userRepository, never()).save(any(User.class));
     }
 
     @Test
@@ -528,29 +625,6 @@ class OrganizationServiceTest {
     }
 
     @Test
-    void onboardOrganization_shouldRejectExistingOrganizationAssignment() {
-        Organization existing = createOrganization(
-                1L,
-                "Existing Organization",
-                "existing@example.com"
-        );
-
-        buyer.setOrganization(existing);
-        authenticate(buyer);
-
-        assertStatus(
-                HttpStatus.CONFLICT,
-                () -> organizationService.onboardOrganization(
-                        validOnboardRequest(),
-                        buyer.getEmail()
-                )
-        );
-
-        verify(organizationRepository, never())
-                .save(any(Organization.class));
-    }
-
-    @Test
     void onboardOrganization_shouldRejectDuplicateBusinessEmail() {
         authenticate(buyer);
 
@@ -568,6 +642,9 @@ class OrganizationServiceTest {
 
         verify(organizationRepository, never())
                 .save(any(Organization.class));
+
+        verify(organizationMembershipRepository, never())
+                .save(any(OrganizationMembership.class));
 
         verify(userRepository, never()).save(any(User.class));
     }
@@ -674,21 +751,35 @@ class OrganizationServiceTest {
                 );
 
         assertSame(organization, result);
+
+        verify(organizationMembershipRepository, never())
+                .findByUserIdAndOrganizationId(any(), any());
     }
 
     @Test
-    void getOrganizationById_shouldAllowBuyerToAccessOwnOrganization() {
-        Organization ownOrganization = createOrganization(
+    void getOrganizationById_shouldAllowActiveBuyerMembership() {
+        authenticate(buyer);
+
+        Organization organization = createOrganization(
                 10L,
                 "Buyer's Organization",
                 "buyer-business@example.com"
         );
 
-        buyer.setOrganization(ownOrganization);
-        authenticate(buyer);
-
         when(organizationRepository.findById(10L))
-                .thenReturn(Optional.of(ownOrganization));
+                .thenReturn(Optional.of(organization));
+
+        when(organizationMembershipRepository.findByUserIdAndOrganizationId(
+                buyer.getId(),
+                10L
+        )).thenReturn(Optional.of(
+                createMembership(
+                        buyer,
+                        organization,
+                        MembershipRole.OWNER,
+                        MembershipStatus.ACTIVE
+                )
+        ));
 
         Organization result =
                 organizationService.getOrganizationById(
@@ -696,16 +787,117 @@ class OrganizationServiceTest {
                         buyer.getEmail()
                 );
 
-        assertSame(ownOrganization, result);
+        assertSame(organization, result);
+
+        verify(organizationMembershipRepository)
+                .findByUserIdAndOrganizationId(buyer.getId(), 10L);
+    }
+
+    @Test
+    void getOrganizationById_shouldAllowActiveMemberWithoutCapability() {
+        authenticate(buyer);
+
+        Organization organization = createOrganization(
+                11L,
+                "Member Organization",
+                "member-business@example.com"
+        );
+
+        when(organizationRepository.findById(11L))
+                .thenReturn(Optional.of(organization));
+
+        when(organizationMembershipRepository.findByUserIdAndOrganizationId(
+                buyer.getId(),
+                11L
+        )).thenReturn(Optional.of(
+                createMembership(
+                        buyer,
+                        organization,
+                        MembershipRole.MEMBER,
+                        MembershipStatus.ACTIVE
+                )
+        ));
+
+        Organization result =
+                organizationService.getOrganizationById(
+                        11L,
+                        buyer.getEmail()
+                );
+
+        assertSame(organization, result);
+    }
+
+    @Test
+    void getOrganizationById_shouldRejectInactiveMembership() {
+        authenticate(buyer);
+
+        Organization organization = createOrganization(
+                12L,
+                "Inactive Membership Organization",
+                "inactive@example.com"
+        );
+
+        when(organizationRepository.findById(12L))
+                .thenReturn(Optional.of(organization));
+
+        when(organizationMembershipRepository.findByUserIdAndOrganizationId(
+                buyer.getId(),
+                12L
+        )).thenReturn(Optional.of(
+                createMembership(
+                        buyer,
+                        organization,
+                        MembershipRole.MEMBER,
+                        MembershipStatus.SUSPENDED
+                )
+        ));
+
+        assertStatus(
+                HttpStatus.FORBIDDEN,
+                () -> organizationService.getOrganizationById(
+                        12L,
+                        buyer.getEmail()
+                )
+        );
+    }
+
+    @Test
+    void getOrganizationById_shouldRejectPendingMembership() {
+        authenticate(buyer);
+
+        Organization organization = createOrganization(
+                13L,
+                "Pending Membership Organization",
+                "pending@example.com"
+        );
+
+        when(organizationRepository.findById(13L))
+                .thenReturn(Optional.of(organization));
+
+        when(organizationMembershipRepository.findByUserIdAndOrganizationId(
+                buyer.getId(),
+                13L
+        )).thenReturn(Optional.of(
+                createMembership(
+                        buyer,
+                        organization,
+                        MembershipRole.MEMBER,
+                        MembershipStatus.INVITED
+                )
+        ));
+
+        assertStatus(
+                HttpStatus.FORBIDDEN,
+                () -> organizationService.getOrganizationById(
+                        13L,
+                        buyer.getEmail()
+                )
+        );
     }
 
     @Test
     void getOrganizationById_shouldRejectAccessToAnotherOrganization() {
-        Organization ownOrganization = createOrganization(
-                10L,
-                "Buyer's Organization",
-                "buyer-business@example.com"
-        );
+        authenticate(buyer);
 
         Organization anotherOrganization = createOrganization(
                 20L,
@@ -713,11 +905,13 @@ class OrganizationServiceTest {
                 "another@example.com"
         );
 
-        buyer.setOrganization(ownOrganization);
-        authenticate(buyer);
-
         when(organizationRepository.findById(20L))
                 .thenReturn(Optional.of(anotherOrganization));
+
+        when(organizationMembershipRepository.findByUserIdAndOrganizationId(
+                buyer.getId(),
+                20L
+        )).thenReturn(Optional.empty());
 
         assertStatus(
                 HttpStatus.FORBIDDEN,
@@ -729,22 +923,27 @@ class OrganizationServiceTest {
     }
 
     @Test
-    void getOrganizationById_shouldRejectBuyerWithoutOrganization() {
+    void getOrganizationById_shouldRejectUserWithoutMembership() {
         authenticate(buyer);
 
         Organization organization = createOrganization(
-                10L,
+                21L,
                 "Some Organization",
                 "some@example.com"
         );
 
-        when(organizationRepository.findById(10L))
+        when(organizationRepository.findById(21L))
                 .thenReturn(Optional.of(organization));
+
+        when(organizationMembershipRepository.findByUserIdAndOrganizationId(
+                buyer.getId(),
+                21L
+        )).thenReturn(Optional.empty());
 
         assertStatus(
                 HttpStatus.FORBIDDEN,
                 () -> organizationService.getOrganizationById(
-                        10L,
+                        21L,
                         buyer.getEmail()
                 )
         );
@@ -764,6 +963,9 @@ class OrganizationServiceTest {
                         buyer.getEmail()
                 )
         );
+
+        verify(organizationMembershipRepository, never())
+                .findByUserIdAndOrganizationId(any(), any());
     }
 
     @Test
@@ -796,25 +998,5 @@ class OrganizationServiceTest {
         );
 
         verify(organizationRepository, never()).findById(any());
-    }
-
-    // =====================================================
-    // REFLECTION HELPER FOR GENERATED ENTITY IDS
-    // =====================================================
-
-    private void setOrganizationId(
-            Organization organization,
-            Long id
-    ) {
-        try {
-            Field idField = Organization.class.getDeclaredField("id");
-            idField.setAccessible(true);
-            idField.set(organization, id);
-        } catch (ReflectiveOperationException exception) {
-            throw new IllegalStateException(
-                    "Unable to assign organization ID in test",
-                    exception
-            );
-        }
     }
 }

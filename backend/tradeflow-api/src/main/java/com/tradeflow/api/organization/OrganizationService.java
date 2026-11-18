@@ -10,14 +10,13 @@ import com.tradeflow.api.membership.OrganizationMembership;
 import com.tradeflow.api.membership.OrganizationMembershipRepository;
 
 import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Locale;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
-
-import java.util.List;
-import java.util.Locale;
 
 @Service
 @Transactional(readOnly = true)
@@ -74,13 +73,6 @@ public class OrganizationService {
             );
         }
 
-        if (user.getOrganization() != null) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "Your account is already associated with an organization"
-            );
-        }
-
         String normalizedBusinessEmail =
                 normalizeEmail(request.businessEmail());
 
@@ -125,9 +117,6 @@ public class OrganizationService {
 
         organizationMembershipRepository.save(ownerMembership);
 
-// Keep the legacy association temporarily
-        user.setOrganization(savedOrganization);
-        userRepository.save(user);
         return new OrganizationOnboardResponse(
                 "Organization created successfully",
                 savedOrganization.getId(),
@@ -150,7 +139,7 @@ public class OrganizationService {
 
     /**
      * Administrators can access any organization.
-     * Buyers and suppliers can access only their own organization.
+     * Other users require an ACTIVE membership in the requested organization.
      */
     public Organization getOrganizationById(
             Long id,
@@ -169,9 +158,15 @@ public class OrganizationService {
             return organization;
         }
 
-        if (user.getOrganization() == null
-                || !user.getOrganization().getId().equals(organization.getId())) {
+        OrganizationMembership membership =
+                organizationMembershipRepository
+                        .findByUserIdAndOrganizationId(user.getId(), id)
+                        .orElseThrow(() -> new ResponseStatusException(
+                                HttpStatus.FORBIDDEN,
+                                "You are not authorized to access this organization"
+                        ));
 
+        if (membership.getStatus() != MembershipStatus.ACTIVE) {
             throw new ResponseStatusException(
                     HttpStatus.FORBIDDEN,
                     "You are not authorized to access this organization"
