@@ -1,41 +1,40 @@
 package com.tradeflow.api.payment.refund;
 
+import com.tradeflow.api.organization.OrganizationCapability;
 import com.tradeflow.api.payment.Payment;
 import com.tradeflow.api.payment.PaymentRepository;
 import com.tradeflow.api.payment.PaymentStatus;
-import com.tradeflow.api.organization.Organization;
+import com.tradeflow.api.security.MembershipAuthorizationService;
 import com.tradeflow.api.user.User;
-import com.tradeflow.api.user.UserRepository;
 import com.tradeflow.api.user.UserRole;
+
+import jakarta.persistence.EntityManager;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
-import jakarta.persistence.EntityManager;
-
 import java.math.BigDecimal;
 import java.util.List;
-import java.util.Locale;
 
 @Service
 public class RefundService {
 
     private final RefundRepository refundRepository;
     private final PaymentRepository paymentRepository;
-    private final UserRepository userRepository;
+    private final MembershipAuthorizationService authorizationService;
     private final EntityManager entityManager;
 
     public RefundService(
             RefundRepository refundRepository,
             PaymentRepository paymentRepository,
-            UserRepository userRepository,
+            MembershipAuthorizationService authorizationService,
             EntityManager entityManager
     ) {
         this.refundRepository = refundRepository;
         this.paymentRepository = paymentRepository;
-        this.userRepository = userRepository;
+        this.authorizationService = authorizationService;
         this.entityManager = entityManager;
     }
 
@@ -45,8 +44,14 @@ public class RefundService {
             RefundRequest request,
             String authenticatedEmail
     ) {
-        User user = getAuthenticatedUser(authenticatedEmail);
-        requireRole(user, UserRole.BUYER);
+        User user = authorizationService.getAuthenticatedUser(authenticatedEmail);
+
+        if (user.getRole() == UserRole.ADMIN) {
+            throw new ResponseStatusException(
+                    HttpStatus.FORBIDDEN,
+                    "Platform administrators cannot request refunds"
+            );
+        }
 
         Payment payment = paymentRepository
                 .findByIdForUpdate(request.paymentId())
@@ -55,7 +60,18 @@ public class RefundService {
                         "Payment not found"
                 ));
 
-        verifyBuyerOwnsPayment(user, payment);
+        Long buyerOrganizationId = payment
+                .getPurchaseOrder()
+                .getQuotation()
+                .getProcurementRequest()
+                .getBuyerOrganization()
+                .getId();
+
+        authorizationService.requireOrganizationCapability(
+                authenticatedEmail,
+                buyerOrganizationId,
+                OrganizationCapability.BUYER
+        );
 
         if (payment.getStatus() != PaymentStatus.COMPLETED) {
             throw new ResponseStatusException(
@@ -98,8 +114,7 @@ public class RefundService {
     // Admin retrieves all refund requests.
     @Transactional(readOnly = true)
     public List<RefundResponse> getAllRefunds(String authenticatedEmail) {
-        User user = getAuthenticatedUser(authenticatedEmail);
-        requireRole(user, UserRole.ADMIN);
+        authorizationService.requirePlatformAdmin(authenticatedEmail);
 
         return refundRepository.findAll()
                 .stream()
@@ -107,17 +122,15 @@ public class RefundService {
                 .toList();
     }
 
-    // Retrieve refund details with ownership verification.
+    // Retrieve refund details with authorization verification.
     @Transactional(readOnly = true)
     public RefundResponse getRefundById(
             Long refundId,
             String authenticatedEmail
     ) {
-        User user = getAuthenticatedUser(authenticatedEmail);
-
         Refund refund = findRefund(refundId);
 
-        verifyRefundAccess(user, refund);
+        verifyRefundAccess(authenticatedEmail, refund);
 
         return RefundResponse.from(refund);
     }
@@ -128,15 +141,13 @@ public class RefundService {
             Long paymentId,
             String authenticatedEmail
     ) {
-        User user = getAuthenticatedUser(authenticatedEmail);
-
         Payment payment = paymentRepository.findById(paymentId)
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND,
                         "Payment not found"
                 ));
 
-        verifyPaymentAccess(user, payment);
+        verifyPaymentAccess(authenticatedEmail, payment);
 
         return refundRepository
                 .findByPayment_IdOrderByCreatedAtDesc(paymentId)
@@ -151,8 +162,7 @@ public class RefundService {
             RefundStatus status,
             String authenticatedEmail
     ) {
-        User user = getAuthenticatedUser(authenticatedEmail);
-        requireRole(user, UserRole.ADMIN);
+        authorizationService.requirePlatformAdmin(authenticatedEmail);
 
         return refundRepository.findByStatus(status)
                 .stream()
@@ -166,8 +176,7 @@ public class RefundService {
             Long refundId,
             String authenticatedEmail
     ) {
-        User user = getAuthenticatedUser(authenticatedEmail);
-        requireRole(user, UserRole.ADMIN);
+        authorizationService.requirePlatformAdmin(authenticatedEmail);
 
         Refund refund = findRefundWithPaymentLock(refundId);
 
@@ -189,8 +198,7 @@ public class RefundService {
             Long refundId,
             String authenticatedEmail
     ) {
-        User user = getAuthenticatedUser(authenticatedEmail);
-        requireRole(user, UserRole.ADMIN);
+        authorizationService.requirePlatformAdmin(authenticatedEmail);
 
         Refund refund = findRefundWithPaymentLock(refundId);
 
@@ -228,8 +236,7 @@ public class RefundService {
             String failureReason,
             String authenticatedEmail
     ) {
-        User user = getAuthenticatedUser(authenticatedEmail);
-        requireRole(user, UserRole.ADMIN);
+        authorizationService.requirePlatformAdmin(authenticatedEmail);
 
         Refund refund = findRefundWithPaymentLock(refundId);
 
@@ -262,7 +269,6 @@ public class RefundService {
                 ));
     }
 
-    // Lock payment before loading refund for state transitions.
     // Lock payment before refreshing refund for state transitions.
     private Refund findRefundWithPaymentLock(Long refundId) {
         Refund refund = findRefund(refundId);
@@ -282,71 +288,17 @@ public class RefundService {
         return refund;
     }
 
-    private User getAuthenticatedUser(String email) {
-        String normalizedEmail = email.trim()
-                .toLowerCase(Locale.ROOT);
+    // Verify whether the authenticated user can access the payment.
+    private void verifyPaymentAccess(
+            String authenticatedEmail,
+            Payment payment
+    ) {
+        User user = authorizationService.getAuthenticatedUser(authenticatedEmail);
 
-        User user = userRepository.findByEmail(normalizedEmail)
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.UNAUTHORIZED,
-                        "Authenticated user not found"
-                ));
-
-        if (!user.isEnabled()) {
-            throw new ResponseStatusException(
-                    HttpStatus.FORBIDDEN,
-                    "Your account is disabled"
-            );
-        }
-
-        return user;
-    }
-
-    private void requireRole(User user, UserRole requiredRole) {
-        if (user.getRole() != requiredRole) {
-            throw new ResponseStatusException(
-                    HttpStatus.FORBIDDEN,
-                    "You do not have permission to perform this action"
-            );
-        }
-    }
-
-    private Organization requireOrganization(User user) {
-        Organization organization = user.getOrganization();
-
-        if (organization == null) {
-            throw new ResponseStatusException(
-                    HttpStatus.FORBIDDEN,
-                    "Your account is not associated with an organization"
-            );
-        }
-
-        return organization;
-    }
-
-    private void verifyBuyerOwnsPayment(User user, Payment payment) {
-        Organization buyerOrganization = requireOrganization(user);
-
-        Long orderBuyerOrganizationId = payment.getPurchaseOrder()
-                .getQuotation()
-                .getProcurementRequest()
-                .getBuyerOrganization()
-                .getId();
-
-        if (!buyerOrganization.getId().equals(orderBuyerOrganizationId)) {
-            throw new ResponseStatusException(
-                    HttpStatus.FORBIDDEN,
-                    "You cannot request a refund for another buyer's payment"
-            );
-        }
-    }
-
-    private void verifyPaymentAccess(User user, Payment payment) {
+        // Platform administrators can read all refunds.
         if (user.getRole() == UserRole.ADMIN) {
             return;
         }
-
-        Organization organization = requireOrganization(user);
 
         Long buyerOrganizationId = payment.getPurchaseOrder()
                 .getQuotation()
@@ -360,23 +312,38 @@ public class RefundService {
                 .getOrganization()
                 .getId();
 
-        if (user.getRole() == UserRole.BUYER
-                && organization.getId().equals(buyerOrganizationId)) {
+        // First, check whether the user has BUYER access.
+        try {
+            authorizationService.requireOrganizationCapability(
+                    authenticatedEmail,
+                    buyerOrganizationId,
+                    OrganizationCapability.BUYER
+            );
+
             return;
+
+        } catch (ResponseStatusException exception) {
+            // Only a 403 permits checking supplier access.
+            // Do not swallow 401, 404, or other errors.
+            if (exception.getStatusCode().value()
+                    != HttpStatus.FORBIDDEN.value()) {
+                throw exception;
+            }
         }
 
-        if (user.getRole() == UserRole.SUPPLIER
-                && organization.getId().equals(supplierOrganizationId)) {
-            return;
-        }
-
-        throw new ResponseStatusException(
-                HttpStatus.FORBIDDEN,
-                "You do not have permission to access this refund"
+        // Then, check whether the user has SUPPLIER access.
+        authorizationService.requireOrganizationCapability(
+                authenticatedEmail,
+                supplierOrganizationId,
+                OrganizationCapability.SUPPLIER
         );
     }
 
-    private void verifyRefundAccess(User user, Refund refund) {
-        verifyPaymentAccess(user, refund.getPayment());
+    // Verify whether the authenticated user can access the refund.
+    private void verifyRefundAccess(
+            String authenticatedEmail,
+            Refund refund
+    ) {
+        verifyPaymentAccess(authenticatedEmail, refund.getPayment());
     }
 }

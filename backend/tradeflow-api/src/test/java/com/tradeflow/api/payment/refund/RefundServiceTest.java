@@ -1,15 +1,16 @@
 package com.tradeflow.api.payment.refund;
 
 import com.tradeflow.api.organization.Organization;
+import com.tradeflow.api.organization.OrganizationCapability;
 import com.tradeflow.api.order.PurchaseOrder;
 import com.tradeflow.api.payment.Payment;
 import com.tradeflow.api.payment.PaymentRepository;
 import com.tradeflow.api.payment.PaymentStatus;
-
 import com.tradeflow.api.procurement.ProcurementRequest;
 import com.tradeflow.api.quotation.Quotation;
+import com.tradeflow.api.security.MembershipAuthorizationService;
+import com.tradeflow.api.supplier.Supplier;
 import com.tradeflow.api.user.User;
-import com.tradeflow.api.user.UserRepository;
 import com.tradeflow.api.user.UserRole;
 
 import jakarta.persistence.EntityManager;
@@ -25,6 +26,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -36,9 +38,12 @@ class RefundServiceTest {
 
     private static final Long REFUND_ID = 1L;
     private static final Long PAYMENT_ID = 10L;
-    private static final Long ORGANIZATION_ID = 100L;
+
+    private static final Long BUYER_ORGANIZATION_ID = 100L;
+    private static final Long SUPPLIER_ORGANIZATION_ID = 200L;
 
     private static final String BUYER_EMAIL = "buyer@test.com";
+    private static final String SUPPLIER_EMAIL = "supplier@test.com";
     private static final String ADMIN_EMAIL = "admin@test.com";
 
     private static final BigDecimal PAYMENT_AMOUNT =
@@ -51,7 +56,7 @@ class RefundServiceTest {
     private PaymentRepository paymentRepository;
 
     @Mock
-    private UserRepository userRepository;
+    private MembershipAuthorizationService authorizationService;
 
     @Mock
     private EntityManager entityManager;
@@ -60,10 +65,16 @@ class RefundServiceTest {
     private User buyer;
 
     @Mock
+    private User supplierUser;
+
+    @Mock
     private User admin;
 
     @Mock
     private Organization buyerOrganization;
+
+    @Mock
+    private Organization supplierOrganization;
 
     @Mock
     private Payment payment;
@@ -77,6 +88,9 @@ class RefundServiceTest {
     @Mock
     private ProcurementRequest procurementRequest;
 
+    @Mock
+    private Supplier supplier;
+
     @InjectMocks
     private RefundService refundService;
 
@@ -84,34 +98,29 @@ class RefundServiceTest {
     // Authentication helpers
     // --------------------------------------------------
 
-    private void configureBuyer() {
-        when(buyer.isEnabled()).thenReturn(true);
-        when(buyer.getRole()).thenReturn(UserRole.BUYER);
-        when(buyer.getOrganization()).thenReturn(buyerOrganization);
-        when(buyerOrganization.getId()).thenReturn(ORGANIZATION_ID);
-    }
-
-    private void configureAdmin() {
-        when(admin.isEnabled()).thenReturn(true);
-        when(admin.getRole()).thenReturn(UserRole.ADMIN);
-    }
-
     private void authenticateBuyer() {
-        configureBuyer();
+        when(authorizationService.getAuthenticatedUser(BUYER_EMAIL))
+                .thenReturn(buyer);
 
-        when(userRepository.findByEmail(BUYER_EMAIL))
-                .thenReturn(Optional.of(buyer));
+        when(buyer.getRole()).thenReturn(UserRole.BUYER);
+    }
+
+    private void authenticateSupplier() {
+        when(authorizationService.getAuthenticatedUser(SUPPLIER_EMAIL))
+                .thenReturn(supplierUser);
+
+        when(supplierUser.getRole()).thenReturn(UserRole.SUPPLIER);
     }
 
     private void authenticateAdmin() {
-        configureAdmin();
+        when(authorizationService.getAuthenticatedUser(ADMIN_EMAIL))
+                .thenReturn(admin);
 
-        when(userRepository.findByEmail(ADMIN_EMAIL))
-                .thenReturn(Optional.of(admin));
+        when(admin.getRole()).thenReturn(UserRole.ADMIN);
     }
 
     // --------------------------------------------------
-    // Payment ownership helper
+    // Payment ownership helpers
     // --------------------------------------------------
 
     private void mockBuyerPaymentOwnership() {
@@ -124,6 +133,32 @@ class RefundServiceTest {
 
         when(procurementRequest.getBuyerOrganization())
                 .thenReturn(buyerOrganization);
+
+        when(buyerOrganization.getId())
+                .thenReturn(BUYER_ORGANIZATION_ID);
+    }
+
+    private void mockSupplierPaymentOwnership() {
+        when(payment.getPurchaseOrder()).thenReturn(purchaseOrder);
+
+        when(purchaseOrder.getQuotation()).thenReturn(quotation);
+
+        when(quotation.getSupplier()).thenReturn(supplier);
+
+        when(supplier.getOrganization()).thenReturn(supplierOrganization);
+
+        when(supplierOrganization.getId())
+                .thenReturn(SUPPLIER_ORGANIZATION_ID);
+    }
+
+    private void mockCompletePaymentOwnership() {
+        mockBuyerPaymentOwnership();
+        mockSupplierPaymentOwnership();
+    }
+
+    private void mockPaymentLookup() {
+        when(paymentRepository.findById(PAYMENT_ID))
+                .thenReturn(Optional.of(payment));
     }
 
     // --------------------------------------------------
@@ -164,6 +199,12 @@ class RefundServiceTest {
         assertEquals(new BigDecimal("300.00"), response.amount());
         assertEquals("Damaged product", response.reason());
         assertEquals(RefundStatus.REQUESTED, response.status());
+
+        verify(authorizationService).requireOrganizationCapability(
+                BUYER_EMAIL,
+                BUYER_ORGANIZATION_ID,
+                OrganizationCapability.BUYER
+        );
 
         verify(refundRepository).save(any(Refund.class));
     }
@@ -242,8 +283,6 @@ class RefundServiceTest {
         authenticateBuyer();
         mockBuyerPaymentOwnership();
 
-        // This test checks payment status before payment ID or amount
-        // is needed by the service.
         when(payment.getStatus()).thenReturn(PaymentStatus.PENDING);
 
         when(paymentRepository.findByIdForUpdate(PAYMENT_ID))
@@ -284,42 +323,32 @@ class RefundServiceTest {
         assertEquals(HttpStatus.FORBIDDEN, exception.getStatusCode());
 
         verify(paymentRepository, never()).findByIdForUpdate(anyLong());
+        verify(authorizationService, never())
+                .requireOrganizationCapability(
+                        anyString(),
+                        anyLong(),
+                        any(OrganizationCapability.class)
+                );
     }
 
     @Test
-    void requestRefund_shouldRejectDisabledBuyer() {
+    void requestRefund_shouldRejectBuyerWithoutBuyerCapability() {
 
-        when(buyer.isEnabled()).thenReturn(false);
-
-        when(userRepository.findByEmail(BUYER_EMAIL))
-                .thenReturn(Optional.of(buyer));
-
-        RefundRequest request = new RefundRequest(
-                PAYMENT_ID,
-                new BigDecimal("500.00"),
-                "Refund request"
-        );
-
-        ResponseStatusException exception = assertThrows(
-                ResponseStatusException.class,
-                () -> refundService.requestRefund(request, BUYER_EMAIL)
-        );
-
-        assertEquals(HttpStatus.FORBIDDEN, exception.getStatusCode());
-    }
-
-    @Test
-    void requestRefund_shouldRejectBuyerWithoutOrganization() {
-
-        when(buyer.isEnabled()).thenReturn(true);
-        when(buyer.getRole()).thenReturn(UserRole.BUYER);
-        when(buyer.getOrganization()).thenReturn(null);
-
-        when(userRepository.findByEmail(BUYER_EMAIL))
-                .thenReturn(Optional.of(buyer));
+        authenticateBuyer();
 
         when(paymentRepository.findByIdForUpdate(PAYMENT_ID))
                 .thenReturn(Optional.of(payment));
+
+        mockBuyerPaymentOwnership();
+
+        doThrow(new ResponseStatusException(
+                HttpStatus.FORBIDDEN,
+                "BUYER capability is not enabled"
+        )).when(authorizationService).requireOrganizationCapability(
+                BUYER_EMAIL,
+                BUYER_ORGANIZATION_ID,
+                OrganizationCapability.BUYER
+        );
 
         RefundRequest request = new RefundRequest(
                 PAYMENT_ID,
@@ -337,14 +366,357 @@ class RefundServiceTest {
         verify(refundRepository, never()).save(any(Refund.class));
     }
 
+    @Test
+    void requestRefund_shouldRejectBuyerWithWrongOrganizationMembership() {
+
+        authenticateBuyer();
+
+        when(paymentRepository.findByIdForUpdate(PAYMENT_ID))
+                .thenReturn(Optional.of(payment));
+
+        mockBuyerPaymentOwnership();
+
+        doThrow(new ResponseStatusException(
+                HttpStatus.FORBIDDEN,
+                "No active membership"
+        )).when(authorizationService).requireOrganizationCapability(
+                BUYER_EMAIL,
+                BUYER_ORGANIZATION_ID,
+                OrganizationCapability.BUYER
+        );
+
+        RefundRequest request = new RefundRequest(
+                PAYMENT_ID,
+                new BigDecimal("500.00"),
+                "Refund request"
+        );
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> refundService.requestRefund(request, BUYER_EMAIL)
+        );
+
+        assertEquals(HttpStatus.FORBIDDEN, exception.getStatusCode());
+
+        verify(refundRepository, never()).save(any(Refund.class));
+    }
+
+    @Test
+    void requestRefund_shouldRejectDisabledBuyer() {
+
+        when(authorizationService.getAuthenticatedUser(BUYER_EMAIL))
+                .thenThrow(new ResponseStatusException(
+                        HttpStatus.FORBIDDEN,
+                        "User account is disabled"
+                ));
+
+        RefundRequest request = new RefundRequest(
+                PAYMENT_ID,
+                new BigDecimal("500.00"),
+                "Refund request"
+        );
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> refundService.requestRefund(request, BUYER_EMAIL)
+        );
+
+        assertEquals(HttpStatus.FORBIDDEN, exception.getStatusCode());
+
+        verify(paymentRepository, never()).findByIdForUpdate(anyLong());
+    }
+
+    // --------------------------------------------------
+    // Refund read authorization tests
+    // --------------------------------------------------
+
+    @Test
+    void getRefundById_shouldAllowBuyerWithBuyerCapability() {
+
+        authenticateBuyer();
+        mockCompletePaymentOwnership();
+
+        Refund refund = new Refund(
+                payment,
+                new BigDecimal("300.00"),
+                "Damaged product"
+        );
+
+        when(refundRepository.findById(REFUND_ID))
+                .thenReturn(Optional.of(refund));
+
+        RefundResponse response =
+                refundService.getRefundById(REFUND_ID, BUYER_EMAIL);
+
+        assertNotNull(response);
+
+        verify(authorizationService).requireOrganizationCapability(
+                BUYER_EMAIL,
+                BUYER_ORGANIZATION_ID,
+                OrganizationCapability.BUYER
+        );
+    }
+
+    @Test
+    void getRefundById_shouldAllowSupplierWithSupplierCapability() {
+
+        authenticateSupplier();
+        mockCompletePaymentOwnership();
+
+        doThrow(new ResponseStatusException(
+                HttpStatus.FORBIDDEN,
+                "No BUYER membership"
+        )).when(authorizationService).requireOrganizationCapability(
+                SUPPLIER_EMAIL,
+                BUYER_ORGANIZATION_ID,
+                OrganizationCapability.BUYER
+        );
+
+        Refund refund = new Refund(
+                payment,
+                new BigDecimal("300.00"),
+                "Damaged product"
+        );
+
+        when(refundRepository.findById(REFUND_ID))
+                .thenReturn(Optional.of(refund));
+
+        RefundResponse response =
+                refundService.getRefundById(REFUND_ID, SUPPLIER_EMAIL);
+
+        assertNotNull(response);
+
+        verify(authorizationService).requireOrganizationCapability(
+                SUPPLIER_EMAIL,
+                SUPPLIER_ORGANIZATION_ID,
+                OrganizationCapability.SUPPLIER
+        );
+    }
+
+    @Test
+    void getRefundById_shouldRejectSupplierWithoutSupplierCapability() {
+
+        authenticateSupplier();
+        mockCompletePaymentOwnership();
+
+        doThrow(new ResponseStatusException(
+                HttpStatus.FORBIDDEN,
+                "No BUYER membership"
+        )).when(authorizationService).requireOrganizationCapability(
+                SUPPLIER_EMAIL,
+                BUYER_ORGANIZATION_ID,
+                OrganizationCapability.BUYER
+        );
+
+        doThrow(new ResponseStatusException(
+                HttpStatus.FORBIDDEN,
+                "No SUPPLIER membership"
+        )).when(authorizationService).requireOrganizationCapability(
+                SUPPLIER_EMAIL,
+                SUPPLIER_ORGANIZATION_ID,
+                OrganizationCapability.SUPPLIER
+        );
+
+        Refund refund = new Refund(
+                payment,
+                new BigDecimal("300.00"),
+                "Damaged product"
+        );
+
+        when(refundRepository.findById(REFUND_ID))
+                .thenReturn(Optional.of(refund));
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> refundService.getRefundById(REFUND_ID, SUPPLIER_EMAIL)
+        );
+
+        assertEquals(HttpStatus.FORBIDDEN, exception.getStatusCode());
+    }
+
+    @Test
+    void getRefundById_shouldNotFallbackWhenBuyerCheckReturnsUnauthorized() {
+
+        authenticateSupplier();
+        mockCompletePaymentOwnership();
+
+        doThrow(new ResponseStatusException(
+                HttpStatus.UNAUTHORIZED,
+                "Authentication required"
+        )).when(authorizationService).requireOrganizationCapability(
+                SUPPLIER_EMAIL,
+                BUYER_ORGANIZATION_ID,
+                OrganizationCapability.BUYER
+        );
+
+        Refund refund = new Refund(
+                payment,
+                new BigDecimal("300.00"),
+                "Damaged product"
+        );
+
+        when(refundRepository.findById(REFUND_ID))
+                .thenReturn(Optional.of(refund));
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> refundService.getRefundById(REFUND_ID, SUPPLIER_EMAIL)
+        );
+
+        assertEquals(HttpStatus.UNAUTHORIZED, exception.getStatusCode());
+
+        verify(authorizationService, never()).requireOrganizationCapability(
+                SUPPLIER_EMAIL,
+                SUPPLIER_ORGANIZATION_ID,
+                OrganizationCapability.SUPPLIER
+        );
+    }
+
+    @Test
+    void getRefundById_shouldAllowPlatformAdmin() {
+
+        authenticateAdmin();
+
+        Refund refund = new Refund(
+                payment,
+                new BigDecimal("300.00"),
+                "Damaged product"
+        );
+
+        when(refundRepository.findById(REFUND_ID))
+                .thenReturn(Optional.of(refund));
+
+        RefundResponse response =
+                refundService.getRefundById(REFUND_ID, ADMIN_EMAIL);
+
+        assertNotNull(response);
+
+        verify(authorizationService, never())
+                .requireOrganizationCapability(
+                        anyString(),
+                        anyLong(),
+                        any(OrganizationCapability.class)
+                );
+    }
+
+    @Test
+    void getRefundsByPaymentId_shouldAllowBuyerWithBuyerCapability() {
+
+        authenticateBuyer();
+        mockCompletePaymentOwnership();
+        mockPaymentLookup();
+
+        when(refundRepository.findByPayment_IdOrderByCreatedAtDesc(PAYMENT_ID))
+                .thenReturn(List.of());
+
+        List<RefundResponse> responses =
+                refundService.getRefundsByPaymentId(PAYMENT_ID, BUYER_EMAIL);
+
+        assertNotNull(responses);
+
+        verify(authorizationService).requireOrganizationCapability(
+                BUYER_EMAIL,
+                BUYER_ORGANIZATION_ID,
+                OrganizationCapability.BUYER
+        );
+    }
+
+    @Test
+    void getRefundsByPaymentId_shouldAllowSupplierWithSupplierCapability() {
+
+        authenticateSupplier();
+        mockCompletePaymentOwnership();
+        mockPaymentLookup();
+
+        doThrow(new ResponseStatusException(
+                HttpStatus.FORBIDDEN,
+                "No BUYER membership"
+        )).when(authorizationService).requireOrganizationCapability(
+                SUPPLIER_EMAIL,
+                BUYER_ORGANIZATION_ID,
+                OrganizationCapability.BUYER
+        );
+
+        when(refundRepository.findByPayment_IdOrderByCreatedAtDesc(PAYMENT_ID))
+                .thenReturn(List.of());
+
+        List<RefundResponse> responses =
+                refundService.getRefundsByPaymentId(
+                        PAYMENT_ID,
+                        SUPPLIER_EMAIL
+                );
+
+        assertNotNull(responses);
+
+        verify(authorizationService).requireOrganizationCapability(
+                SUPPLIER_EMAIL,
+                SUPPLIER_ORGANIZATION_ID,
+                OrganizationCapability.SUPPLIER
+        );
+    }
+
+    @Test
+    void getRefundsByPaymentId_shouldAllowPlatformAdmin() {
+
+        authenticateAdmin();
+        mockPaymentLookup();
+
+        when(refundRepository.findByPayment_IdOrderByCreatedAtDesc(PAYMENT_ID))
+                .thenReturn(List.of());
+
+        List<RefundResponse> responses =
+                refundService.getRefundsByPaymentId(PAYMENT_ID, ADMIN_EMAIL);
+
+        assertNotNull(responses);
+
+        verify(authorizationService, never())
+                .requireOrganizationCapability(
+                        anyString(),
+                        anyLong(),
+                        any(OrganizationCapability.class)
+                );
+    }
+
+    // --------------------------------------------------
+    // Admin-only refund listing tests
+    // --------------------------------------------------
+
+    @Test
+    void getAllRefunds_shouldRequirePlatformAdmin() {
+
+        when(refundRepository.findAll()).thenReturn(List.of());
+
+        List<RefundResponse> responses =
+                refundService.getAllRefunds(ADMIN_EMAIL);
+
+        assertNotNull(responses);
+
+        verify(authorizationService).requirePlatformAdmin(ADMIN_EMAIL);
+    }
+
+    @Test
+    void getRefundsByStatus_shouldRequirePlatformAdmin() {
+
+        when(refundRepository.findByStatus(RefundStatus.REQUESTED))
+                .thenReturn(List.of());
+
+        List<RefundResponse> responses =
+                refundService.getRefundsByStatus(
+                        RefundStatus.REQUESTED,
+                        ADMIN_EMAIL
+                );
+
+        assertNotNull(responses);
+
+        verify(authorizationService).requirePlatformAdmin(ADMIN_EMAIL);
+    }
+
     // --------------------------------------------------
     // Process refund tests
     // --------------------------------------------------
 
     @Test
     void processRefund_shouldChangeStatusToProcessing() {
-
-        authenticateAdmin();
 
         Refund refund = new Refund(
                 payment,
@@ -368,14 +740,13 @@ class RefundServiceTest {
 
         assertEquals(RefundStatus.PROCESSING, response.status());
 
+        verify(authorizationService).requirePlatformAdmin(ADMIN_EMAIL);
         verify(entityManager).refresh(refund);
         verify(refundRepository).save(refund);
     }
 
     @Test
     void processRefund_shouldRejectAlreadyProcessedRefund() {
-
-        authenticateAdmin();
 
         Refund refund = new Refund(
                 payment,
@@ -410,8 +781,6 @@ class RefundServiceTest {
     @Test
     void completeRefund_shouldMarkPaymentAsRefundedWhenFullyRefunded() {
 
-        authenticateAdmin();
-
         Refund refund = new Refund(
                 payment,
                 PAYMENT_AMOUNT,
@@ -441,14 +810,13 @@ class RefundServiceTest {
 
         assertEquals(RefundStatus.COMPLETED, response.status());
 
+        verify(authorizationService).requirePlatformAdmin(ADMIN_EMAIL);
         verify(payment).setStatus(PaymentStatus.REFUNDED);
         verify(refundRepository).saveAndFlush(refund);
     }
 
     @Test
     void completeRefund_shouldKeepPaymentCompletedForPartialRefund() {
-
-        authenticateAdmin();
 
         Refund refund = new Refund(
                 payment,
@@ -486,8 +854,6 @@ class RefundServiceTest {
     @Test
     void completeRefund_shouldRejectRequestedRefund() {
 
-        authenticateAdmin();
-
         Refund refund = new Refund(
                 payment,
                 new BigDecimal("300.00"),
@@ -518,8 +884,6 @@ class RefundServiceTest {
 
     @Test
     void failRefund_shouldMarkRefundAsFailed() {
-
-        authenticateAdmin();
 
         Refund refund = new Refund(
                 payment,
@@ -552,13 +916,12 @@ class RefundServiceTest {
                 response.failureReason()
         );
 
+        verify(authorizationService).requirePlatformAdmin(ADMIN_EMAIL);
         verify(refundRepository).save(refund);
     }
 
     @Test
     void failRefund_shouldRejectBlankFailureReason() {
-
-        authenticateAdmin();
 
         Refund refund = new Refund(
                 payment,
